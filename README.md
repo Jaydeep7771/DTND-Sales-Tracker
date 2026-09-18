@@ -40,7 +40,7 @@ when the dev server restarts.
 | `/admin` | Operations overview: metrics, approval queue, low-stock alerts |
 | `/admin/inventory` | SKU table with search, category chips, pagination, **Add product** modal (client-side WebP compression → Storage) |
 | `/admin/orders` | Order queue in split or kanban view; approve / **send back with comments and adjusted quantities** / reject / mark fulfilled, plus a per-order conversation thread |
-| `/admin/customers` | Customer list with invite status, and **Onboard customer** which creates the account and a single-use invite link (emailed when Resend is configured) |
+| `/admin/customers` | Customer list with invite status and the live invite link (copy / open / resend email / new link), and **Onboard customer** which creates the account, generates the single-use link and emails it |
 | `/invite/[token]` | Customer opens the invite link, sets a password, and lands in the catalog |
 | `/admin/cms` | Announcements and FAQs with publish toggles |
 | `/portal` | Catalog with filter rail, 9-per-page "Load more", add to cart |
@@ -48,6 +48,10 @@ when the dev server restarts.
 | `/portal/orders` | Active-order timeline, order history, and the conversation: a sent-back order shows the admin's comment and proposed quantities, which the customer can accept and resubmit, reply to, or withdraw |
 | `/design-system` | Palette, type, controls and layout rules |
 | `/login` | Email + password sign-in |
+
+## Email
+
+Invite emails are sent through [Resend](https://resend.com) whenever `RESEND_API_KEY` is set, in demo mode too. Set `EMAIL_FROM` to a verified sender (e.g. `Dynamic Traders <orders@yourdomain.com>`) and `NEXT_PUBLIC_APP_URL` to the public site URL so links resolve. Without a key, the admin still gets the link and a preview of the exact message in the portal. The template lives in `src/lib/email.ts` (HTML + plain text).
 
 ## UX conventions
 

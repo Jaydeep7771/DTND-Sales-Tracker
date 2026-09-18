@@ -1,7 +1,8 @@
 import { Card, PageHeading } from "@/components/ui";
 import OnboardCustomer from "@/components/admin/OnboardCustomer";
 import InviteStatus from "@/components/admin/InviteStatus";
-import { getCustomers, getOrders, isDemo } from "@/lib/data";
+import { getCustomers, getOrders } from "@/lib/data";
+import { inviteUrlFor } from "@/lib/invite";
 import { money, shortDate } from "@/lib/format";
 
 export default async function CustomersPage() {
@@ -13,11 +14,11 @@ export default async function CustomersPage() {
       <PageHeading
         title="Customers"
         sub={`${customers.length} portal accounts${pendingInvites ? ` · ${pendingInvites} invite${pendingInvites === 1 ? "" : "s"} pending` : ""}`}
-        actions={<OnboardCustomer demo={isDemo} />}
+        actions={<OnboardCustomer />}
       />
       <Card className="overflow-hidden">
         <div className="overflow-x-auto">
-          <table className="w-full border-collapse min-w-[860px]">
+          <table className="w-full border-collapse min-w-[960px]">
             <thead>
               <tr className="bg-surface-soft">
                 <th className="th">Company</th>
@@ -36,7 +37,7 @@ export default async function CustomersPage() {
                     <td className="td font-medium">{c.company_name ?? "—"}</td>
                     <td className="td font-mono text-xs text-slate">{c.email}</td>
                     <td className="td text-[12.5px] text-slate-strong whitespace-nowrap">{shortDate(c.created_at)}</td>
-                    <td className="td"><InviteStatus customer={c} /></td>
+                    <td className="td"><InviteStatus customer={c} inviteUrl={c.invite_token ? inviteUrlFor(c.invite_token) : null} /></td>
                     <td className="td font-mono text-right">{mine.length}</td>
                     <td className="td font-mono text-right font-medium">{money(mine.reduce((a, o) => a + o.total, 0))}</td>
                   </tr>

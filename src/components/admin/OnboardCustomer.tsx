@@ -1,20 +1,23 @@
 "use client";
 
-// Onboard a customer: creates the portal account and produces a single-use
-// invite link (also emailed when Resend is configured).
+// Onboard a customer: creates the portal account, generates a single-use
+// invite link and emails it. The modal then shows the link, delivery status
+// and a preview of the email.
 import { useState, useTransition, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import { Button, Field, Input, Modal } from "@/components/ui";
-import { onboardCustomer } from "@/lib/actions";
-import CopyLink from "./CopyLink";
+import { useToast } from "@/components/ui/Toast";
+import { onboardCustomer, type InviteResult } from "@/lib/actions";
+import InvitePanel from "./InvitePanel";
 
-export default function OnboardCustomer({ demo }: { demo: boolean }) {
+export default function OnboardCustomer() {
   const router = useRouter();
+  const toast = useToast();
   const [open, setOpen] = useState(false);
   const [company, setCompany] = useState("");
   const [email, setEmail] = useState("");
   const [error, setError] = useState<string | null>(null);
-  const [link, setLink] = useState<string | null>(null);
+  const [result, setResult] = useState<InviteResult | null>(null);
   const [busy, start] = useTransition();
 
   function submit(e: FormEvent) {
@@ -23,13 +26,14 @@ export default function OnboardCustomer({ demo }: { demo: boolean }) {
     start(async () => {
       const res = await onboardCustomer({ company_name: company, email });
       if (!res.ok) return setError(res.error);
-      setLink(res.data!.inviteUrl);
+      setResult(res.data!);
+      toast.push(res.data!.email.sent ? `Invite emailed to ${res.data!.email.to}` : `${company.trim()} created. Email not sent, copy the link.`, res.data!.email.sent ? "success" : "info");
       router.refresh();
     });
   }
 
   function close() {
-    setOpen(false); setLink(null); setCompany(""); setEmail(""); setError(null);
+    setOpen(false); setResult(null); setCompany(""); setEmail(""); setError(null);
   }
 
   return (
@@ -37,33 +41,28 @@ export default function OnboardCustomer({ demo }: { demo: boolean }) {
       <Button onClick={() => setOpen(true)}>+ Onboard customer</Button>
       {open && (
         <Modal
-          title={link ? "Invite link ready" : "Onboard customer"}
-          sub={link ? "Share this link with the customer. It is single-use and lets them set a password and start ordering." : "Creates a portal account and an invite link for the customer."}
+          title={result ? `Invite ready for ${company.trim()}` : "Onboard customer"}
+          sub={result ? "The link is single-use. It lets the customer set a password and go straight to the catalog." : "Creates a portal account and emails the customer a single-use invite link."}
           onClose={close}
           footer={
-            link ? (
+            result ? (
               <Button type="button" onClick={close}>Done</Button>
             ) : (
               <>
                 <Button variant="secondary" type="button" onClick={close}>Cancel</Button>
-                <Button type="submit" form="onboard" disabled={busy}>{busy ? "Creating…" : "Create account & invite link"}</Button>
+                <Button type="submit" form="onboard" disabled={busy}>{busy ? "Creating…" : "Create account & send invite"}</Button>
               </>
             )
           }
         >
-          {link ? (
-            <div className="p-5 flex flex-col gap-3.5">
-              <div className="rounded-lg bg-success-bg border border-success-bd px-3 py-2 text-[13px] text-success">
-                Account created for <strong>{company}</strong> ({email}).{demo ? " Demo mode: no email is sent, so copy the link below." : " An invite email has been sent if email is configured."}
-              </div>
-              <CopyLink url={link} />
-              <div className="text-xs text-slate">Opening the link takes the customer to a page where they set their password, then straight into the catalog. You can regenerate the link from the customer list if it expires or gets lost.</div>
-            </div>
+          {result ? (
+            <div className="p-5"><InvitePanel result={result} /></div>
           ) : (
             <form id="onboard" onSubmit={submit} className="p-5 flex flex-col gap-3.5">
               {error && <p className="rounded-lg bg-danger-bg border border-danger-bd px-3 py-2 text-[13px] text-danger">{error}</p>}
               <Field label="Company name"><Input required value={company} onChange={(e) => setCompany(e.target.value)} placeholder="e.g. Meezan Hardware Co." /></Field>
               <Field label="Login email"><Input required type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="orders@company.pk" /></Field>
+              <div className="text-xs text-slate">The customer receives a welcome email with the activation link. You can also copy the link from the next screen or from the customer list at any time.</div>
             </form>
           )}
         </Modal>

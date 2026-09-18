@@ -6,7 +6,9 @@ import { revalidatePath } from "next/cache";
 import { cookies } from "next/headers";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { demo, newId, DEMO_ADMIN_ID } from "@/lib/demo-store";
+import { demo, newId, DEMO_ADMIN_ID, DEMO_ADMIN } from "@/lib/demo-store";
+import { inviteEmail, sendEmail } from "@/lib/email";
+import { inviteUrlFor } from "@/lib/invite";
 import { isDemo, DEMO_CUSTOMER_COOKIE } from "@/lib/data";
 import type { OrderStatus } from "@/types/database";
 import type { SubmitOrderInput } from "@/lib/types";
@@ -179,68 +181,89 @@ export async function createAnnouncement(input: { title: string; content: string
 }
 
 // ---------------------------------------------------------------- customers (invite-link onboarding)
-function inviteUrl(token: string) {
-  return `${process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000"}/invite/${token}`;
+export interface InviteResult {
+  inviteUrl: string;
+  email: { to: string; subject: string; text: string; sent: boolean; reason?: string };
+}
+
+async function adminDisplayName(): Promise<string> {
+  if (isDemo) return DEMO_ADMIN.name;
+  const me = await (await import("@/lib/data")).getCurrentUser();
+  return me?.company_name ?? "Operations team";
+}
+
+/** Composes and sends the invite email; returns the message so the admin can preview it. */
+async function deliverInvite(to: string, company: string, token: string): Promise<InviteResult> {
+  const url = inviteUrlFor(token);
+  const msg = inviteEmail({ to, company, inviteUrl: url, adminName: await adminDisplayName() });
+  const result = await sendEmail(msg);
+  return { inviteUrl: url, email: { to, subject: msg.subject, text: msg.text, sent: result.sent, reason: result.reason } };
 }
 
 /**
- * Creates the customer account and an invite link. Live mode: the auth user is
- * created with a random password and a one-time token; the link (also emailed
- * if Resend is configured) lets the customer set their own password and lands
- * them in the portal. Demo mode: the link switches the portal to that customer.
+ * Creates the customer account, generates a single-use invite link and emails
+ * it. Live mode: the auth user is created with a random password the customer
+ * replaces on acceptance. Demo mode: the link switches the portal to that customer.
+ * Email goes out in either mode when RESEND_API_KEY is configured.
  */
-export async function onboardCustomer(input: { company_name: string; email: string }): Promise<Result<{ inviteUrl: string }>> {
+export async function onboardCustomer(input: { company_name: string; email: string }): Promise<Result<InviteResult>> {
   const email = input.email.trim().toLowerCase();
+  const company = input.company_name.trim();
   if (!email.includes("@")) return { ok: false, error: "Enter a valid email." };
-  if (!input.company_name.trim()) return { ok: false, error: "Company name is required." };
+  if (!company) return { ok: false, error: "Company name is required." };
   const token = crypto.randomUUID().replace(/-/g, "");
   const now = new Date().toISOString();
 
   if (isDemo) {
     if (demo.customers.some((c) => c.email === email)) return { ok: false, error: "A customer with that email already exists." };
-    demo.customers.push({ id: newId(), email, role: "customer", company_name: input.company_name.trim(), invite_token: token, invited_at: now, activated_at: null, created_at: now });
-    revalidateAll();
-    return { ok: true, data: { inviteUrl: inviteUrl(token) } };
-  }
-
-  const admin = createAdminClient();
-  const { data: created, error } = await admin.auth.admin.createUser({
-    email,
-    password: crypto.randomUUID(), // replaced by the customer on invite acceptance
-    email_confirm: true,
-    user_metadata: { role: "customer", company_name: input.company_name.trim() },
-  });
-  if (error || !created.user) return { ok: false, error: error?.message ?? "Could not create user." };
-  const { error: tokenError } = await admin.from("users").update({ invite_token: token, invited_at: now }).eq("id", created.user.id);
-  if (tokenError) return { ok: false, error: tokenError.message };
-
-  if (process.env.RESEND_API_KEY) {
-    const { Resend } = await import("resend");
-    await new Resend(process.env.RESEND_API_KEY).emails.send({
-      from: process.env.EMAIL_FROM ?? "Portal <onboarding@resend.dev>",
-      to: email,
-      subject: "You are invited to the Dynamic Traders wholesale portal",
-      text: `Welcome ${input.company_name}.\n\nOpen this link to set your password and start ordering:\n${inviteUrl(token)}\n\nThe link is single-use.`,
+    demo.customers.push({ id: newId(), email, role: "customer", company_name: company, invite_token: token, invited_at: now, activated_at: null, created_at: now });
+  } else {
+    const admin = createAdminClient();
+    const { data: created, error } = await admin.auth.admin.createUser({
+      email,
+      password: crypto.randomUUID(), // replaced by the customer on invite acceptance
+      email_confirm: true,
+      user_metadata: { role: "customer", company_name: company },
     });
+    if (error || !created.user) return { ok: false, error: error?.message ?? "Could not create user." };
+    const { error: tokenError } = await admin.from("users").update({ invite_token: token, invited_at: now }).eq("id", created.user.id);
+    if (tokenError) return { ok: false, error: tokenError.message };
   }
+
+  const result = await deliverInvite(email, company, token);
   revalidateAll();
-  return { ok: true, data: { inviteUrl: inviteUrl(token) } };
+  return { ok: true, data: result };
 }
 
-/** Regenerates the invite link for a customer who has not activated yet. */
-export async function regenerateInvite(customerId: string): Promise<Result<{ inviteUrl: string }>> {
+/** Re-sends the invite email using the customer's current link (does not invalidate it). */
+export async function resendInvite(customerId: string): Promise<Result<InviteResult>> {
+  let c: { email: string; company_name: string | null; invite_token: string | null } | undefined;
+  if (isDemo) c = demo.customers.find((c) => c.id === customerId);
+  else c = (await createAdminClient().from("users").select("email, company_name, invite_token").eq("id", customerId).maybeSingle()).data ?? undefined;
+  if (!c) return { ok: false, error: "Customer not found." };
+  if (!c.invite_token) return { ok: false, error: "This customer has already activated their account." };
+  const result = await deliverInvite(c.email, c.company_name ?? c.email, c.invite_token);
+  return { ok: true, data: result };
+}
+
+/** Issues a fresh link (invalidating the old one) and emails it. */
+export async function regenerateInvite(customerId: string): Promise<Result<InviteResult>> {
   const token = crypto.randomUUID().replace(/-/g, "");
+  let c: { email: string; company_name: string | null } | undefined;
   if (isDemo) {
-    const c = demo.customers.find((c) => c.id === customerId);
-    if (!c) return { ok: false, error: "Customer not found." };
-    c.invite_token = token; c.invited_at = new Date().toISOString();
-    revalidateAll();
-    return { ok: true, data: { inviteUrl: inviteUrl(token) } };
+    const d = demo.customers.find((c) => c.id === customerId);
+    if (!d) return { ok: false, error: "Customer not found." };
+    d.invite_token = token; d.invited_at = new Date().toISOString();
+    c = d;
+  } else {
+    const admin = createAdminClient();
+    const { data, error } = await admin.from("users").update({ invite_token: token, invited_at: new Date().toISOString() }).eq("id", customerId).select("email, company_name").single();
+    if (error || !data) return { ok: false, error: error?.message ?? "Customer not found." };
+    c = data;
   }
-  const { error } = await createAdminClient().from("users").update({ invite_token: token, invited_at: new Date().toISOString() }).eq("id", customerId);
-  if (error) return { ok: false, error: error.message };
+  const result = await deliverInvite(c.email, c.company_name ?? c.email, token);
   revalidateAll();
-  return { ok: true, data: { inviteUrl: inviteUrl(token) } };
+  return { ok: true, data: result };
 }
 
 /** Looks up an invite token. Used by the /invite/[token] page. */
