@@ -1,7 +1,7 @@
 // In-memory demo data, seeded from the design prototype. Used whenever
 // Supabase keys are not configured so the app is runnable out of the box.
 // State lives on globalThis so it survives Next.js dev HMR reloads.
-import type { Product, Announcement, UserProfile, OrderStatus } from "@/types/database";
+import type { Product, Announcement, UserProfile, OrderStatus, OrderMessage } from "@/types/database";
 
 interface DemoOrder {
   id: string;
@@ -20,6 +20,7 @@ interface DemoState {
   customers: UserProfile[];
   orders: DemoOrder[];
   announcements: Announcement[];
+  messages: OrderMessage[];
   nextOrderNumber: number;
 }
 
@@ -82,7 +83,7 @@ function seed(): DemoState {
     ["Bahria Trade House", "ali@bahriatrade.pk"],
     ["Indus Motors Depot", "depot@indusmotors.pk"],
     ["Gulberg Builders Mart", "mart@gulbergbm.pk"],
-  ].map(([company, email]) => ({ id: uuid(email), email, role: "customer" as const, company_name: company, created_at: now }));
+  ].map(([company, email]) => ({ id: uuid(email), email, role: "customer" as const, company_name: company, invite_token: null, invited_at: now, activated_at: now, created_at: now }));
   const byEmail = (e: string) => customers.find((c) => c.email === e)!;
 
   // [name, sku, qty, price]
@@ -124,15 +125,23 @@ function seed(): DemoState {
     { id: uuid("f4"), title: "Do you deliver outside Sindh?", content: "Yes, freight is quoted at approval.", type: "faq", priority: 4, expires_at: null, is_active: true, created_at: now },
   ];
 
-  return { products, customers, orders, announcements, nextOrderNumber: 24189 };
+  return { products, customers, orders, announcements, messages: [], nextOrderNumber: 24189 };
 }
 
-const g = globalThis as unknown as { __dtndDemo?: DemoState };
-export const demo: DemoState = g.__dtndDemo ?? (g.__dtndDemo = seed());
+// Bump when DemoState changes shape so HMR-preserved state is reseeded.
+const DEMO_VERSION = 2;
+const g = globalThis as unknown as { __dtndDemo?: DemoState; __dtndDemoVersion?: number };
+if (!g.__dtndDemo || g.__dtndDemoVersion !== DEMO_VERSION) {
+  g.__dtndDemo = seed();
+  g.__dtndDemoVersion = DEMO_VERSION;
+}
+export const demo: DemoState = g.__dtndDemo;
 
 /** The customer the portal acts as in demo mode. */
 export const DEMO_CUSTOMER_EMAIL = "imran@meezanhw.pk";
 export const DEMO_ADMIN = { name: "Rashid Khan", title: "Operations admin", initials: "RK" };
+/** Stable id for the demo admin, used as message author. */
+export const DEMO_ADMIN_ID = uuid("admin");
 
 export function newId(): string {
   return crypto.randomUUID();

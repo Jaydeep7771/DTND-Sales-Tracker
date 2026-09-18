@@ -31,8 +31,8 @@ export function Badge({ tone, children, className = "" }: { tone: BadgeTone; chi
   return <span className={`inline-block text-[11px] font-semibold px-2.5 py-[3px] rounded-full border whitespace-nowrap ${badgeTones[tone]} ${className}`}>{children}</span>;
 }
 
-export const orderTone: Record<OrderStatus, BadgeTone> = { pending: "warning", approved: "info", fulfilled: "success", rejected: "danger" };
-export const orderLabel: Record<OrderStatus, string> = { pending: "Pending", approved: "Approved", fulfilled: "Fulfilled", rejected: "Rejected" };
+export const orderTone: Record<OrderStatus, BadgeTone> = { pending: "warning", changes_requested: "info", approved: "info", fulfilled: "success", rejected: "danger", cancelled: "danger" };
+export const orderLabel: Record<OrderStatus, string> = { pending: "Pending", changes_requested: "Sent back", approved: "Approved", fulfilled: "Fulfilled", rejected: "Rejected", cancelled: "Withdrawn" };
 export const stockTone: Record<StockState, BadgeTone> = { "In stock": "success", "Low stock": "warning", Backorder: "danger" };
 
 export function OrderBadge({ status }: { status: OrderStatus }) {

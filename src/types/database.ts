@@ -1,10 +1,11 @@
 // Hand-written for the POC. Regenerate once the schema is live with:
 //   npx supabase gen types typescript --project-id <ref> > src/types/database.ts
 export type UserRole = "admin" | "customer";
-export type OrderStatus = "pending" | "approved" | "rejected" | "fulfilled";
+export type OrderStatus = "pending" | "changes_requested" | "approved" | "rejected" | "fulfilled" | "cancelled";
 export type AnnouncementType = "announcement" | "faq";
 
-type UsersRow = { id: string; email: string; role: UserRole; company_name: string | null; created_at: string };
+type UsersRow = { id: string; email: string; role: UserRole; company_name: string | null; invite_token: string | null; invited_at: string | null; activated_at: string | null; created_at: string };
+type OrderMessagesRow = { id: string; order_id: string; author_id: string; author_role: UserRole; body: string; created_at: string };
 type ProductsRow = {
   id: string;
   sku: string;
@@ -48,7 +49,8 @@ type Optional<T, K extends keyof T> = Omit<T, K> & Partial<Pick<T, K>>;
 export interface Database {
   public: {
     Tables: {
-      users: { Row: UsersRow; Insert: Optional<UsersRow, "role" | "company_name" | "created_at">; Update: Partial<UsersRow>; Relationships: [] };
+      users: { Row: UsersRow; Insert: Optional<UsersRow, "role" | "company_name" | "invite_token" | "invited_at" | "activated_at" | "created_at">; Update: Partial<UsersRow>; Relationships: [] };
+      order_messages: { Row: OrderMessagesRow; Insert: Optional<OrderMessagesRow, "id" | "created_at">; Update: Partial<OrderMessagesRow>; Relationships: [] };
       products: {
         Row: ProductsRow;
         Insert: Optional<ProductsRow, "id" | "description" | "category" | "unit_of_measure" | "image_url" | "stock_quantity" | "reorder_point" | "is_archived" | "created_at" | "updated_at">;
@@ -81,3 +83,4 @@ export type Order = OrdersRow;
 export type OrderItem = OrderItemsRow;
 export type Announcement = AnnouncementsRow;
 export type UserProfile = UsersRow;
+export type OrderMessage = OrderMessagesRow;

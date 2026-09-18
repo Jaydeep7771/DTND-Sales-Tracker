@@ -1,8 +1,8 @@
 // View models the UI renders. Both the Supabase adapter and the demo store
 // produce these shapes so pages never care where data came from.
-import type { OrderStatus, Product, UserProfile, Announcement } from "@/types/database";
+import type { OrderStatus, Product, UserProfile, Announcement, OrderMessage } from "@/types/database";
 
-export type { OrderStatus, Product, UserProfile, Announcement };
+export type { OrderStatus, Product, UserProfile, Announcement, OrderMessage };
 
 export interface OrderLine {
   id: string;
@@ -24,6 +24,7 @@ export interface OrderView {
   note: string | null;
   customer: { id: string; company_name: string; email: string };
   items: OrderLine[];
+  messages: OrderMessage[];
   subtotal: number;
   total: number; // subtotal + 5% sales tax
 }

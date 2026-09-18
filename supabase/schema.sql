@@ -8,7 +8,7 @@ create extension if not exists "pgcrypto";
 
 -- ---------- Enums ----------------------------------------------------
 create type public.user_role         as enum ('admin', 'customer');
-create type public.order_status      as enum ('pending', 'approved', 'rejected', 'fulfilled');
+create type public.order_status      as enum ('pending', 'changes_requested', 'approved', 'rejected', 'fulfilled', 'cancelled');
 create type public.announcement_type as enum ('announcement', 'faq');
 
 -- ---------- users ----------------------------------------------------
@@ -18,6 +18,9 @@ create table public.users (
   email        text not null unique,
   role         public.user_role not null default 'customer',
   company_name text,
+  invite_token text unique,                    -- set on onboarding, cleared when the invite is accepted
+  invited_at   timestamptz,
+  activated_at timestamptz,
   created_at   timestamptz not null default now()
 );
 
@@ -94,6 +97,17 @@ create table public.order_items (
 );
 create index order_items_order_idx on public.order_items (order_id);
 
+-- ---------- order_messages (admin <-> customer thread per order) ----
+create table public.order_messages (
+  id          uuid primary key default gen_random_uuid(),
+  order_id    uuid not null references public.orders (id) on delete cascade,
+  author_id   uuid not null references public.users (id) on delete cascade,
+  author_role public.user_role not null,
+  body        text not null,
+  created_at  timestamptz not null default now()
+);
+create index order_messages_order_idx on public.order_messages (order_id, created_at);
+
 -- ---------- announcements (CMS) -------------------------------------
 create table public.announcements (
   id         uuid primary key default gen_random_uuid(),
@@ -125,6 +139,7 @@ alter table public.products      enable row level security;
 alter table public.orders        enable row level security;
 alter table public.order_items   enable row level security;
 alter table public.announcements enable row level security;
+alter table public.order_messages enable row level security;
 
 -- users: read own row; admins read/write all. Inserts come from the trigger.
 create policy "users: self read"   on public.users for select using (id = auth.uid() or public.is_admin());
@@ -147,6 +162,22 @@ create policy "order_items: read" on public.order_items for select
 create policy "order_items: own insert" on public.order_items for insert
   with check (exists (select 1 from public.orders o where o.id = order_id and o.customer_id = auth.uid() and o.status = 'pending'));
 
+-- order_messages: participants of the order only. Customers may post while the
+-- order is still open (pending / changes_requested); admins any time.
+create policy "order_messages: read" on public.order_messages for select
+  using (exists (select 1 from public.orders o where o.id = order_id and (o.customer_id = auth.uid() or public.is_admin())));
+create policy "order_messages: insert" on public.order_messages for insert
+  with check (author_id = auth.uid() and (public.is_admin() or exists (
+    select 1 from public.orders o where o.id = order_id and o.customer_id = auth.uid() and o.status in ('pending', 'changes_requested'))));
+
+-- orders: customers may update their own open orders (resubmit / withdraw).
+create policy "orders: own update" on public.orders for update
+  using (customer_id = auth.uid() and status in ('pending', 'changes_requested'))
+  with check (customer_id = auth.uid() and status in ('pending', 'cancelled'));
+create policy "order_items: own update" on public.order_items for update
+  using (exists (select 1 from public.orders o where o.id = order_id and (o.customer_id = auth.uid() or public.is_admin())));
+create policy "order_items: admin delete" on public.order_items for delete using (public.is_admin());
+
 -- announcements: everyone signed in reads active; admins manage.
 create policy "announcements: read active" on public.announcements for select
   using (auth.uid() is not null and (is_active or public.is_admin()));
@@ -157,6 +188,7 @@ create policy "announcements: admin write" on public.announcements for all
 -- Realtime (admin dashboard subscribes to INSERT on orders)
 -- =====================================================================
 alter publication supabase_realtime add table public.orders;
+alter publication supabase_realtime add table public.order_messages;
 
 -- =====================================================================
 -- Storage: public bucket for product images. Admins write, anyone reads.

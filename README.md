@@ -39,12 +39,13 @@ when the dev server restarts.
 | --- | --- |
 | `/admin` | Operations overview: metrics, approval queue, low-stock alerts |
 | `/admin/inventory` | SKU table with search, category chips, pagination, **Add product** modal (client-side WebP compression → Storage) |
-| `/admin/orders` | Order queue in split or kanban view; approve / reject / mark fulfilled |
-| `/admin/customers` | Customer list and **Onboard customer** (creates login, emails temp password) |
+| `/admin/orders` | Order queue in split or kanban view; approve / **send back with comments and adjusted quantities** / reject / mark fulfilled, plus a per-order conversation thread |
+| `/admin/customers` | Customer list with invite status, and **Onboard customer** which creates the account and a single-use invite link (emailed when Resend is configured) |
+| `/invite/[token]` | Customer opens the invite link, sets a password, and lands in the catalog |
 | `/admin/cms` | Announcements and FAQs with publish toggles |
 | `/portal` | Catalog with filter rail, 9-per-page "Load more", add to cart |
 | `/portal/checkout` | Review order, delivery details, submit (status `pending`) |
-| `/portal/orders` | Active-order timeline and order history |
+| `/portal/orders` | Active-order timeline, order history, and the conversation: a sent-back order shows the admin's comment and proposed quantities, which the customer can accept and resubmit, reply to, or withdraw |
 | `/design-system` | Palette, type, controls and layout rules |
 | `/login` | Email + password sign-in |
 

@@ -1,10 +1,14 @@
 // Server-side read layer. Uses Supabase when keys are configured, otherwise
 // the in-memory demo store so the app runs with zero setup.
 import "server-only";
+import { cookies } from "next/headers";
 import { createClient } from "@/lib/supabase/server";
 import { demo, DEMO_CUSTOMER_EMAIL } from "@/lib/demo-store";
 import { TAX_RATE } from "@/lib/types";
-import type { Product, Announcement, UserProfile, OrderView, OrderLine, ProductQuery, ProductPage, CategoryCount, DashboardMetrics, OrderStatus } from "@/lib/types";
+import type { Product, Announcement, UserProfile, OrderView, OrderLine, OrderMessage, ProductQuery, ProductPage, CategoryCount, DashboardMetrics, OrderStatus } from "@/lib/types";
+
+/** Cookie that picks which demo customer the portal acts as (set by the invite flow). */
+export const DEMO_CUSTOMER_COOKIE = "dtnd-demo-customer";
 
 export const isDemo =
   !process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL.includes("placeholder");
@@ -14,6 +18,7 @@ function buildOrder(
   o: { id: string; order_number: string; status: OrderStatus; created_at: string; required_by: string | null; delivery_address: string | null; note: string | null },
   customer: { id: string; company_name: string | null; email: string },
   items: OrderLine[],
+  messages: OrderMessage[],
 ): OrderView {
   const subtotal = items.reduce((a, l) => a + l.quantity * l.price_at_purchase, 0);
   return {
@@ -26,6 +31,7 @@ function buildOrder(
     note: o.note,
     customer: { id: customer.id, company_name: customer.company_name ?? customer.email, email: customer.email },
     items,
+    messages,
     subtotal,
     total: Math.round(subtotal * (1 + TAX_RATE)),
   };
@@ -93,14 +99,14 @@ export async function getOrders(opts: { customerId?: string } = {}): Promise<Ord
           const p = demo.products.find((p) => p.id === it.product_id)!;
           return { id: it.id, product_id: p.id, name: p.name, sku: p.sku, quantity: it.quantity, price_at_purchase: it.price_at_purchase, stock: p.stock_quantity };
         });
-        return buildOrder(o, customer, items);
+        return buildOrder(o, customer, items, demo.messages.filter((m) => m.order_id === o.id));
       });
   }
 
   const supabase = await createClient();
   let query = supabase
     .from("orders")
-    .select("*, customer:users!orders_customer_id_fkey(id, company_name, email), items:order_items(id, product_id, quantity, price_at_purchase, product:products(name, sku, stock_quantity))")
+    .select("*, customer:users!orders_customer_id_fkey(id, company_name, email), items:order_items(id, product_id, quantity, price_at_purchase, product:products(name, sku, stock_quantity)), messages:order_messages(*)")
     .order("created_at", { ascending: false });
   if (opts.customerId) query = query.eq("customer_id", opts.customerId);
   const { data, error } = await query;
@@ -108,12 +114,14 @@ export async function getOrders(opts: { customerId?: string } = {}): Promise<Ord
   type Row = NonNullable<typeof data>[number] & {
     customer: { id: string; company_name: string | null; email: string };
     items: { id: string; product_id: string; quantity: number; price_at_purchase: number; product: { name: string; sku: string; stock_quantity: number } }[];
+    messages: OrderMessage[];
   };
   return ((data ?? []) as unknown as Row[]).map((o) =>
     buildOrder(
       o,
       o.customer,
       o.items.map((it) => ({ id: it.id, product_id: it.product_id, name: it.product.name, sku: it.product.sku, quantity: it.quantity, price_at_purchase: it.price_at_purchase, stock: it.product.stock_quantity })),
+      [...o.messages].sort((a, b) => a.created_at.localeCompare(b.created_at)),
     ),
   );
 }
@@ -129,9 +137,13 @@ export async function getCustomers(): Promise<UserProfile[]> {
   return data ?? [];
 }
 
-/** The signed-in user's profile. In demo mode the portal acts as a fixed customer. */
+/** The signed-in user's profile. In demo mode the portal acts as the customer
+ *  chosen via the invite flow (cookie), defaulting to Meezan Hardware. */
 export async function getCurrentUser(): Promise<UserProfile | null> {
-  if (isDemo) return demo.customers.find((c) => c.email === DEMO_CUSTOMER_EMAIL) ?? null;
+  if (isDemo) {
+    const id = (await cookies()).get(DEMO_CUSTOMER_COOKIE)?.value;
+    return demo.customers.find((c) => c.id === id) ?? demo.customers.find((c) => c.email === DEMO_CUSTOMER_EMAIL) ?? null;
+  }
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return null;
@@ -156,7 +168,7 @@ export async function getDashboardMetrics(): Promise<DashboardMetrics> {
   const now = Date.now();
   const startOfToday = new Date(); startOfToday.setHours(0, 0, 0, 0);
   const weekAgo = now - 7 * 86400e3;
-  const pending = orders.filter((o) => o.status === "pending");
+  const pending = orders.filter((o) => o.status === "pending" || o.status === "changes_requested");
   const fulfilled = orders.filter((o) => o.status === "fulfilled" && new Date(o.created_at).getTime() > weekAgo);
   return {
     ordersToday: orders.filter((o) => new Date(o.created_at) >= startOfToday).length,

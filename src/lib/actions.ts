@@ -3,10 +3,11 @@
 // Server Actions: every mutation in the app. Each one works against Supabase
 // when configured and against the demo store otherwise.
 import { revalidatePath } from "next/cache";
+import { cookies } from "next/headers";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { demo, newId, DEMO_CUSTOMER_EMAIL } from "@/lib/demo-store";
-import { isDemo } from "@/lib/data";
+import { demo, newId, DEMO_ADMIN_ID } from "@/lib/demo-store";
+import { isDemo, DEMO_CUSTOMER_COOKIE } from "@/lib/data";
 import type { OrderStatus } from "@/types/database";
 import type { SubmitOrderInput } from "@/lib/types";
 
@@ -62,7 +63,7 @@ export async function setOrderStatus(orderId: string, status: OrderStatus): Prom
     const o = demo.orders.find((o) => o.id === orderId);
     if (!o) return { ok: false, error: "Order not found." };
     // Approving deducts stock, mirroring the DB trigger you'd add later.
-    if (status === "approved" && o.status === "pending") {
+    if (status === "approved" && (o.status === "pending" || o.status === "changes_requested")) {
       for (const it of o.items) {
         const p = demo.products.find((p) => p.id === it.product_id);
         if (p) p.stock_quantity = Math.max(0, p.stock_quantity - it.quantity);
@@ -83,7 +84,9 @@ export async function submitOrder(input: SubmitOrderInput): Promise<Result<{ ord
   if (!input.lines.length) return { ok: false, error: "Your cart is empty." };
 
   if (isDemo) {
-    const customer = demo.customers.find((c) => c.email === DEMO_CUSTOMER_EMAIL)!;
+    const me = await author();
+    const customer = demo.customers.find((c) => c.id === me?.id);
+    if (!customer) return { ok: false, error: "Sign in first." };
     const n = demo.nextOrderNumber++;
     const id = newId();
     demo.orders.unshift({
@@ -156,39 +159,223 @@ export async function createAnnouncement(input: { title: string; content: string
   return { ok: true };
 }
 
-// ---------------------------------------------------------------- customers
-export async function onboardCustomer(input: { company_name: string; email: string }): Promise<Result<{ tempPassword: string }>> {
-  if (!input.email.includes("@")) return { ok: false, error: "Enter a valid email." };
-  const tempPassword = "DT-" + Math.random().toString(36).slice(2, 10);
+// ---------------------------------------------------------------- customers (invite-link onboarding)
+function inviteUrl(token: string) {
+  return `${process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000"}/invite/${token}`;
+}
+
+/**
+ * Creates the customer account and an invite link. Live mode: the auth user is
+ * created with a random password and a one-time token; the link (also emailed
+ * if Resend is configured) lets the customer set their own password and lands
+ * them in the portal. Demo mode: the link switches the portal to that customer.
+ */
+export async function onboardCustomer(input: { company_name: string; email: string }): Promise<Result<{ inviteUrl: string }>> {
+  const email = input.email.trim().toLowerCase();
+  if (!email.includes("@")) return { ok: false, error: "Enter a valid email." };
+  if (!input.company_name.trim()) return { ok: false, error: "Company name is required." };
+  const token = crypto.randomUUID().replace(/-/g, "");
+  const now = new Date().toISOString();
 
   if (isDemo) {
-    demo.customers.push({ id: newId(), email: input.email.trim(), role: "customer", company_name: input.company_name.trim(), created_at: new Date().toISOString() });
+    if (demo.customers.some((c) => c.email === email)) return { ok: false, error: "A customer with that email already exists." };
+    demo.customers.push({ id: newId(), email, role: "customer", company_name: input.company_name.trim(), invite_token: token, invited_at: now, activated_at: null, created_at: now });
     revalidateAll();
-    return { ok: true, data: { tempPassword } };
+    return { ok: true, data: { inviteUrl: inviteUrl(token) } };
   }
 
-  // Creates the auth user; the on_auth_user_created trigger inserts the profile row.
   const admin = createAdminClient();
-  const { error } = await admin.auth.admin.createUser({
-    email: input.email.trim(),
-    password: tempPassword,
+  const { data: created, error } = await admin.auth.admin.createUser({
+    email,
+    password: crypto.randomUUID(), // replaced by the customer on invite acceptance
     email_confirm: true,
     user_metadata: { role: "customer", company_name: input.company_name.trim() },
   });
-  if (error) return { ok: false, error: error.message };
+  if (error || !created.user) return { ok: false, error: error?.message ?? "Could not create user." };
+  const { error: tokenError } = await admin.from("users").update({ invite_token: token, invited_at: now }).eq("id", created.user.id);
+  if (tokenError) return { ok: false, error: tokenError.message };
 
-  // Welcome email (Resend). Skipped silently if no key is configured.
   if (process.env.RESEND_API_KEY) {
     const { Resend } = await import("resend");
     await new Resend(process.env.RESEND_API_KEY).emails.send({
       from: process.env.EMAIL_FROM ?? "Portal <onboarding@resend.dev>",
-      to: input.email.trim(),
-      subject: "Your Dynamic Traders portal login",
-      text: `Welcome ${input.company_name}.\n\nSign in at ${process.env.NEXT_PUBLIC_APP_URL ?? ""}/login\nEmail: ${input.email}\nTemporary password: ${tempPassword}\n\nPlease change it after your first login.`,
+      to: email,
+      subject: "You are invited to the Dynamic Traders wholesale portal",
+      text: `Welcome ${input.company_name}.\n\nOpen this link to set your password and start ordering:\n${inviteUrl(token)}\n\nThe link is single-use.`,
     });
   }
   revalidateAll();
-  return { ok: true, data: { tempPassword } };
+  return { ok: true, data: { inviteUrl: inviteUrl(token) } };
+}
+
+/** Regenerates the invite link for a customer who has not activated yet. */
+export async function regenerateInvite(customerId: string): Promise<Result<{ inviteUrl: string }>> {
+  const token = crypto.randomUUID().replace(/-/g, "");
+  if (isDemo) {
+    const c = demo.customers.find((c) => c.id === customerId);
+    if (!c) return { ok: false, error: "Customer not found." };
+    c.invite_token = token; c.invited_at = new Date().toISOString();
+    revalidateAll();
+    return { ok: true, data: { inviteUrl: inviteUrl(token) } };
+  }
+  const { error } = await createAdminClient().from("users").update({ invite_token: token, invited_at: new Date().toISOString() }).eq("id", customerId);
+  if (error) return { ok: false, error: error.message };
+  revalidateAll();
+  return { ok: true, data: { inviteUrl: inviteUrl(token) } };
+}
+
+/** Looks up an invite token. Used by the /invite/[token] page. */
+export async function getInvite(token: string): Promise<{ email: string; company_name: string | null; activated: boolean } | null> {
+  if (isDemo) {
+    const c = demo.customers.find((c) => c.invite_token === token);
+    return c ? { email: c.email, company_name: c.company_name, activated: !!c.activated_at } : null;
+  }
+  const { data } = await createAdminClient().from("users").select("email, company_name, activated_at").eq("invite_token", token).maybeSingle();
+  return data ? { email: data.email, company_name: data.company_name, activated: !!data.activated_at } : null;
+}
+
+/** Customer accepts the invite: sets a password (live) and is signed in to the portal. */
+export async function acceptInvite(token: string, password: string): Promise<Result> {
+  if (isDemo) {
+    const c = demo.customers.find((c) => c.invite_token === token);
+    if (!c) return { ok: false, error: "This invite link is invalid or has already been used." };
+    c.activated_at = new Date().toISOString();
+    c.invite_token = null;
+    (await cookies()).set(DEMO_CUSTOMER_COOKIE, c.id, { path: "/", httpOnly: true, sameSite: "lax" });
+    revalidateAll();
+    return { ok: true };
+  }
+  if (password.length < 8) return { ok: false, error: "Password must be at least 8 characters." };
+  const admin = createAdminClient();
+  const { data: profile } = await admin.from("users").select("id, email").eq("invite_token", token).maybeSingle();
+  if (!profile) return { ok: false, error: "This invite link is invalid or has already been used." };
+  const { error } = await admin.auth.admin.updateUserById(profile.id, { password });
+  if (error) return { ok: false, error: error.message };
+  await admin.from("users").update({ invite_token: null, activated_at: new Date().toISOString() }).eq("id", profile.id);
+  const { error: signInError } = await (await createClient()).auth.signInWithPassword({ email: profile.email, password });
+  if (signInError) return { ok: false, error: signInError.message };
+  revalidateAll();
+  return { ok: true };
+}
+
+// ---------------------------------------------------------------- order conversation (send back / reply / resubmit)
+async function author(): Promise<{ id: string; role: "admin" | "customer" } | null> {
+  const { getCurrentUser } = await import("@/lib/data");
+  const u = await getCurrentUser();
+  return u ? { id: u.id, role: u.role } : null;
+}
+
+async function addMessage(orderId: string, by: { id: string; role: "admin" | "customer" }, body: string): Promise<Result> {
+  if (isDemo) {
+    demo.messages.push({ id: newId(), order_id: orderId, author_id: by.id, author_role: by.role, body, created_at: new Date().toISOString() });
+    return { ok: true };
+  }
+  const { error } = await (await createClient()).from("order_messages").insert({ order_id: orderId, author_id: by.id, author_role: by.role, body });
+  return error ? { ok: false, error: error.message } : { ok: true };
+}
+
+/**
+ * Admin sends an order back to the customer with a comment and (optionally)
+ * adjusted line quantities, e.g. "only half of the Hex Bolts are available".
+ * Lines set to 0 are removed. The order moves to `changes_requested`.
+ */
+export async function sendBackOrder(orderId: string, comment: string, quantities: Record<string, number>): Promise<Result> {
+  if (!comment.trim()) return { ok: false, error: "Add a comment so the customer knows what to change." };
+  const by = isDemo ? { id: DEMO_ADMIN_ID, role: "admin" as const } : await author();
+  if (!by || by.role !== "admin") return { ok: false, error: "Admins only." };
+
+  const changes: string[] = [];
+  if (isDemo) {
+    const o = demo.orders.find((o) => o.id === orderId);
+    if (!o) return { ok: false, error: "Order not found." };
+    o.items = o.items.flatMap((it) => {
+      const q = quantities[it.id];
+      if (q === undefined || q === it.quantity) return [it];
+      const name = demo.products.find((p) => p.id === it.product_id)?.name ?? it.product_id;
+      if (q <= 0) { changes.push(`Removed ${name}`); return []; }
+      changes.push(`${name}: ${it.quantity.toLocaleString()} → ${q.toLocaleString()}`);
+      return [{ ...it, quantity: q }];
+    });
+    if (o.items.length === 0) return { ok: false, error: "An order needs at least one line. Reject it instead." };
+    o.status = "changes_requested";
+  } else {
+    const supabase = await createClient();
+    const { data: items } = await supabase.from("order_items").select("id, quantity, product:products(name)").eq("order_id", orderId);
+    for (const it of items ?? []) {
+      const q = quantities[it.id];
+      if (q === undefined || q === it.quantity) continue;
+      const name = (it.product as unknown as { name: string } | null)?.name ?? "line";
+      if (q <= 0) { await supabase.from("order_items").delete().eq("id", it.id); changes.push(`Removed ${name}`); }
+      else { await supabase.from("order_items").update({ quantity: q }).eq("id", it.id); changes.push(`${name}: ${it.quantity.toLocaleString()} → ${q.toLocaleString()}`); }
+    }
+    const { error } = await supabase.from("orders").update({ status: "changes_requested" }).eq("id", orderId);
+    if (error) return { ok: false, error: error.message };
+  }
+  const body = changes.length ? `${comment.trim()}\n\nProposed changes:\n• ${changes.join("\n• ")}` : comment.trim();
+  const res = await addMessage(orderId, by, body);
+  revalidateAll();
+  return res;
+}
+
+/** Either side posts a reply on the order thread. */
+export async function replyToOrder(orderId: string, body: string): Promise<Result> {
+  if (!body.trim()) return { ok: false, error: "Message is empty." };
+  const by = isDemo && (await author())?.role !== "customer" ? { id: DEMO_ADMIN_ID, role: "admin" as const } : await author();
+  if (!by) return { ok: false, error: "Sign in to reply." };
+  const res = await addMessage(orderId, by, body.trim());
+  revalidateAll();
+  return res;
+}
+
+/** Admin reply helper: always posts as admin (demo mode has no admin session). */
+export async function adminReplyToOrder(orderId: string, body: string): Promise<Result> {
+  if (!body.trim()) return { ok: false, error: "Message is empty." };
+  const by = isDemo ? { id: DEMO_ADMIN_ID, role: "admin" as const } : await author();
+  if (!by || by.role !== "admin") return { ok: false, error: "Admins only." };
+  const res = await addMessage(orderId, by, body.trim());
+  revalidateAll();
+  return res;
+}
+
+/** Customer accepts the proposed changes (or edits quantities) and resubmits for approval. */
+export async function resubmitOrder(orderId: string, quantities: Record<string, number>, note: string): Promise<Result> {
+  const by = await author();
+  if (!by) return { ok: false, error: "Sign in first." };
+  if (isDemo) {
+    const o = demo.orders.find((o) => o.id === orderId && o.customer_id === by.id);
+    if (!o) return { ok: false, error: "Order not found." };
+    o.items = o.items.flatMap((it) => { const q = quantities[it.id] ?? it.quantity; return q <= 0 ? [] : [{ ...it, quantity: q }]; });
+    if (o.items.length === 0) return { ok: false, error: "Keep at least one line, or withdraw the order." };
+    o.status = "pending";
+  } else {
+    const supabase = await createClient();
+    for (const [id, q] of Object.entries(quantities)) {
+      if (q <= 0) await supabase.from("order_items").delete().eq("id", id);
+      else await supabase.from("order_items").update({ quantity: q }).eq("id", id);
+    }
+    const { error } = await supabase.from("orders").update({ status: "pending" }).eq("id", orderId);
+    if (error) return { ok: false, error: error.message };
+  }
+  await addMessage(orderId, by, note.trim() || "Accepted the changes and resubmitted for approval.");
+  revalidateAll();
+  return { ok: true };
+}
+
+/** Customer withdraws an open order. */
+export async function withdrawOrder(orderId: string, reason: string): Promise<Result> {
+  const by = await author();
+  if (!by) return { ok: false, error: "Sign in first." };
+  if (isDemo) {
+    const o = demo.orders.find((o) => o.id === orderId && o.customer_id === by.id);
+    if (!o) return { ok: false, error: "Order not found." };
+    o.status = "cancelled";
+  } else {
+    const { error } = await (await createClient()).from("orders").update({ status: "cancelled" }).eq("id", orderId);
+    if (error) return { ok: false, error: error.message };
+  }
+  await addMessage(orderId, by, reason.trim() || "Order withdrawn by customer.");
+  revalidateAll();
+  return { ok: true };
 }
 
 // ---------------------------------------------------------------- auth
