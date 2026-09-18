@@ -4,18 +4,22 @@
 import { useState, useTransition, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import { Badge, Button, Card, CardHeader, Field, Input, Modal, Textarea, Toggle } from "@/components/ui";
+import { useToast } from "@/components/ui/Toast";
 import { createAnnouncement, toggleAnnouncement } from "@/lib/actions";
 import { shortDate } from "@/lib/format";
 import type { Announcement } from "@/lib/types";
 
 export default function CmsManager({ announcements, faqs }: { announcements: Announcement[]; faqs: Announcement[] }) {
   const router = useRouter();
+  const toast = useToast();
   const [, start] = useTransition();
   const [modal, setModal] = useState<"announcement" | "faq" | null>(null);
 
   function toggle(a: Announcement, on: boolean) {
     start(async () => {
-      await toggleAnnouncement(a.id, on);
+      const res = await toggleAnnouncement(a.id, on);
+      if (!res.ok) return toast.push(res.error, "error");
+      toast.push(on ? `Published: ${a.title}` : `Unpublished: ${a.title}`, "success");
       router.refresh();
     });
   }

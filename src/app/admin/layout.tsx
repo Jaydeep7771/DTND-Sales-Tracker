@@ -25,7 +25,7 @@ export default async function AdminLayout({ children }: { children: React.ReactN
     <>
       {isDemo && <ScreenSwitcher />}
       {!isDemo && <OrderNotifications />}
-      <AdminShell pendingCount={m.pendingApprovals} totalSkus={m.totalSkus} lowStockCount={m.lowStockCount} admin={admin} topOffset={topOffset}>
+      <AdminShell pendingCount={m.pendingApprovals} totalSkus={m.totalSkus} lowStockCount={m.lowStockCount} admin={admin} topOffset={topOffset} demo={isDemo}>
         {children}
       </AdminShell>
     </>

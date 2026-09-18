@@ -9,7 +9,7 @@ interface CartCtx {
   lines: CartLine[];
   open: boolean;
   setOpen: (v: boolean) => void;
-  add: (line: Omit<CartLine, "quantity">, qty: number) => void;
+  add: (line: Omit<CartLine, "quantity">, qty: number, opts?: { open?: boolean }) => void;
   setQty: (product_id: string, qty: number) => void;
   remove: (product_id: string) => void;
   clear: () => void;
@@ -38,13 +38,13 @@ export function CartProvider({ children }: { children: ReactNode }) {
     try { localStorage.setItem(KEY, JSON.stringify(lines)); } catch {}
   }, [lines, hydrated]);
 
-  const add = useCallback((line: Omit<CartLine, "quantity">, qty: number) => {
+  const add = useCallback((line: Omit<CartLine, "quantity">, qty: number, opts: { open?: boolean } = {}) => {
     setLines((ls) => {
       const i = ls.findIndex((l) => l.product_id === line.product_id);
       if (i >= 0) return ls.map((l, j) => (j === i ? { ...l, quantity: l.quantity + qty } : l));
       return [...ls, { ...line, quantity: qty }];
     });
-    setOpen(true);
+    if (opts.open !== false) setOpen(true);
   }, []);
   const setQty = useCallback((id: string, qty: number) => setLines((ls) => ls.map((l) => (l.product_id === id ? { ...l, quantity: Math.max(1, qty) } : l))), []);
   const remove = useCallback((id: string) => setLines((ls) => ls.filter((l) => l.product_id !== id)), []);

@@ -92,7 +92,6 @@ export default function Checkout() {
         <div className="bg-info-bg border border-info-bd rounded-lg p-[11px] text-xs text-info">Submitted orders are reviewed by an operations admin, usually within 2 business hours.</div>
         {error && <div className="rounded-lg bg-danger-bg border border-danger-bd px-3 py-2 text-[13px] text-danger">{error}</div>}
         <Button size="lg" onClick={submit} disabled={busy || cart.lines.length === 0}>{busy ? "Submitting…" : "Submit order to admin"}</Button>
-        <Button variant="secondary" disabled>Save as draft</Button>
       </Card>
     </div>
   );

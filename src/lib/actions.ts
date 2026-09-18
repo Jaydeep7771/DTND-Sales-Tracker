@@ -57,6 +57,25 @@ export async function createProduct(input: NewProductInput): Promise<Result<{ sk
   return { ok: true, data: { sku } };
 }
 
+export interface UpdateProductInput { price: number; stock_quantity: number; reorder_point: number; is_archived: boolean; name: string; description: string }
+
+export async function updateProduct(id: string, input: UpdateProductInput): Promise<Result> {
+  if (!input.name.trim()) return { ok: false, error: "Product name is required." };
+  if (!(input.price >= 0)) return { ok: false, error: "Price must be zero or more." };
+  if (!Number.isInteger(input.stock_quantity) || input.stock_quantity < 0) return { ok: false, error: "Stock must be a whole number." };
+  if (isDemo) {
+    const p = demo.products.find((p) => p.id === id);
+    if (!p) return { ok: false, error: "Product not found." };
+    Object.assign(p, { ...input, name: input.name.trim(), description: input.description.trim() || null, updated_at: new Date().toISOString() });
+    revalidateAll();
+    return { ok: true };
+  }
+  const { error } = await (await createClient()).from("products").update({ ...input, name: input.name.trim(), description: input.description.trim() || null }).eq("id", id);
+  if (error) return { ok: false, error: error.message };
+  revalidateAll();
+  return { ok: true };
+}
+
 // ---------------------------------------------------------------- orders
 export async function setOrderStatus(orderId: string, status: OrderStatus): Promise<Result> {
   if (isDemo) {
@@ -315,6 +334,18 @@ export async function sendBackOrder(orderId: string, comment: string, quantities
   const res = await addMessage(orderId, by, body);
   revalidateAll();
   return res;
+}
+
+/** Admin rejects with a reason that is posted to the thread so the customer knows why. */
+export async function rejectOrder(orderId: string, reason: string): Promise<Result> {
+  if (!reason.trim()) return { ok: false, error: "Give the customer a reason." };
+  const by = isDemo ? { id: DEMO_ADMIN_ID, role: "admin" as const } : await author();
+  if (!by || by.role !== "admin") return { ok: false, error: "Admins only." };
+  const res = await setOrderStatus(orderId, "rejected");
+  if (!res.ok) return res;
+  await addMessage(orderId, by, "Order rejected: " + reason.trim());
+  revalidateAll();
+  return { ok: true };
 }
 
 /** Either side posts a reply on the order thread. */

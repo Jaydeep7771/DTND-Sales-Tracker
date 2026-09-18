@@ -51,6 +51,9 @@
   a:hover { color: var(--color-accent); }
   input, select, button, textarea { font: inherit; }
   ::selection { background: #cfe0f5; }
+  :focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; border-radius: 4px; }
+  input:focus-visible, textarea:focus-visible, select:focus-visible { outline: none; }
+  @media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition: none !important; animation: none !important; } }
 }
 
 @layer components {
@@ -62,4 +65,7 @@
   .th { text-align: left; padding: 10px 14px; font-size: 10.5px; letter-spacing: .08em; text-transform: uppercase; color: var(--color-slate); font-weight: 600; border-bottom: 1px solid var(--color-border); white-space: nowrap; }
   .th-r { text-align: right; }
   .td { padding: 11px 14px; font-size: 13px; }
+  /* Loading skeleton */
+  .skeleton { background: linear-gradient(90deg, #eef2f6 25%, #f6f8fb 50%, #eef2f6 75%); background-size: 200% 100%; animation: shimmer 1.4s infinite; border-radius: 6px; }
+  @keyframes shimmer { 0% { background-position: 200% 0 } 100% { background-position: -200% 0 } }
 }

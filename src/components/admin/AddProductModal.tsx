@@ -9,6 +9,7 @@
 import { useRef, useState, type ChangeEvent, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import { Button, Field, Input, Modal, Select } from "@/components/ui";
+import { useToast } from "@/components/ui/Toast";
 import { createProduct } from "@/lib/actions";
 import { compressImage, formatBytes, IMAGE_ACCEPTED_TYPES } from "@/lib/image";
 import { createClient } from "@/lib/supabase/client";
@@ -24,6 +25,7 @@ type ImageState =
 
 export default function AddProductModal({ categories, demo, onClose }: { categories: string[]; demo: boolean; onClose: () => void }) {
   const router = useRouter();
+  const toast = useToast();
   const fileRef = useRef<HTMLInputElement>(null);
   const [image, setImage] = useState<ImageState>({ status: "idle" });
   const [busy, setBusy] = useState(false);
@@ -75,6 +77,7 @@ export default function AddProductModal({ categories, demo, onClose }: { categor
         if (uploadedPath) await createClient().storage.from(BUCKET).remove([uploadedPath]);
         throw new Error(res.error);
       }
+      toast.push(`${form.name.trim()} added as ${res.data!.sku}`, "success");
       router.refresh();
       onClose();
     } catch (err) {

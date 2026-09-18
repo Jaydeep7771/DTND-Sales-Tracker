@@ -35,3 +35,17 @@ export function stockState(stock: number, reorder: number): StockState {
   if (stock < reorder) return "Low stock";
   return "In stock";
 }
+
+/** "just now", "35 min ago", "3h ago", "2d ago" */
+export function relativeTime(iso: string): string {
+  const s = Math.max(0, (Date.now() - new Date(iso).getTime()) / 1000);
+  if (s < 60) return "just now";
+  if (s < 3600) return Math.floor(s / 60) + " min ago";
+  if (s < 86400) return Math.floor(s / 3600) + "h ago";
+  return Math.floor(s / 86400) + "d ago";
+}
+
+/** Hours an open order has been waiting. */
+export function hoursSince(iso: string): number {
+  return (Date.now() - new Date(iso).getTime()) / 3600e3;
+}

@@ -19,12 +19,7 @@ export default async function AdminOverviewPage() {
       <PageHeading
         eyebrow={longDate()}
         title="Operations overview"
-        actions={
-          <>
-            <Button variant="secondary">Export day sheet</Button>
-            <Link href="/admin/orders"><Button>Review pending orders</Button></Link>
-          </>
-        }
+        actions={<Link href="/admin/orders?status=pending"><Button>Review pending orders</Button></Link>}
       />
 
       <div className="grid gap-3.5" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))" }}>

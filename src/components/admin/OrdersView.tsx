@@ -1,13 +1,14 @@
 "use client";
 
-// Order management: split view (queue + detail) or kanban, with
-// approve / send back (with comment + adjusted quantities) / reject.
-import { useState, useTransition, type FormEvent } from "react";
-import { useRouter } from "next/navigation";
+// Order management: filterable queue + detail (split) or kanban, with
+// approve / send back (comment + adjusted quantities) / reject (with reason).
+import { useMemo, useState, useTransition, type FormEvent } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { Button, Card, Field, Input, Modal, OrderBadge, orderLabel, Textarea } from "@/components/ui";
+import { useToast } from "@/components/ui/Toast";
 import OrderThread from "@/components/OrderThread";
-import { adminReplyToOrder, sendBackOrder, setOrderStatus } from "@/lib/actions";
-import { money, num, shortDateTime, shortDate } from "@/lib/format";
+import { adminReplyToOrder, rejectOrder, sendBackOrder, setOrderStatus } from "@/lib/actions";
+import { hoursSince, money, num, relativeTime, shortDateTime, shortDate } from "@/lib/format";
 import type { OrderView, OrderStatus } from "@/lib/types";
 
 const TONE: Record<OrderStatus, string> = { pending: "#E6A23C", changes_requested: "#2F7DD1", approved: "#2F7DD1", fulfilled: "#0E7A46", rejected: "#B42318", cancelled: "#94A3B8" };
@@ -17,29 +18,46 @@ const KANBAN: { status: OrderStatus; cls: string }[] = [
   { status: "approved", cls: "text-info" },
   { status: "fulfilled", cls: "text-success" },
 ];
+type Filter = "open" | OrderStatus | "all";
+const FILTERS: [Filter, string][] = [["open", "Needs action"], ["pending", "Pending"], ["changes_requested", "Sent back"], ["approved", "Approved"], ["fulfilled", "Fulfilled"], ["all", "All"]];
+const SLA_HOURS = 4;
 
 export default function OrdersView({ orders, initialId }: { orders: OrderView[]; initialId?: string }) {
   const router = useRouter();
+  const params = useSearchParams();
+  const toast = useToast();
   const [view, setView] = useState<"split" | "kanban">("split");
-  const [selectedId, setSelectedId] = useState(initialId ?? orders[0]?.id);
+  const [filter, setFilter] = useState<Filter>((params.get("status") as Filter) || "open");
+  const [q, setQ] = useState(params.get("q") ?? "");
+  const [selectedId, setSelectedId] = useState<string | undefined>(initialId);
   const [pending, start] = useTransition();
-  const [error, setError] = useState<string | null>(null);
-  const [sendBack, setSendBack] = useState(false);
-  const active = orders.find((o) => o.id === selectedId) ?? orders[0];
+  const [modal, setModal] = useState<"sendBack" | "reject" | null>(null);
 
-  function act(status: OrderStatus) {
+  const filtered = useMemo(() => {
+    const term = q.trim().toLowerCase();
+    return orders.filter((o) => {
+      const byStatus = filter === "all" ? true : filter === "open" ? o.status === "pending" || o.status === "changes_requested" : o.status === filter;
+      const byQ = !term || o.order_number.toLowerCase().includes(term) || o.customer.company_name.toLowerCase().includes(term) || o.items.some((l) => l.sku.toLowerCase().includes(term));
+      return byStatus && byQ;
+    });
+  }, [orders, filter, q]);
+
+  const active = orders.find((o) => o.id === selectedId) ?? filtered[0] ?? orders[0];
+
+  function act(status: OrderStatus, label: string) {
     if (!active) return;
-    setError(null);
     start(async () => {
       const res = await setOrderStatus(active.id, status);
-      if (!res.ok) setError(res.error);
+      if (!res.ok) return toast.push(res.error, "error");
+      toast.push(`${active.order_number} ${label}`, "success");
       router.refresh();
     });
   }
 
-  const summary = (o: OrderView) => `${o.items.length} lines · ${num(o.items.reduce((a, l) => a + l.quantity, 0))} units`;
+  const summary = (o: OrderView) => `${o.items.length} line${o.items.length === 1 ? "" : "s"} · ${num(o.items.reduce((a, l) => a + l.quantity, 0))} units`;
   const count = (s: OrderStatus) => orders.filter((o) => o.status === s).length;
   const isOpen = active && (active.status === "pending" || active.status === "changes_requested");
+  const overSla = (o: OrderView) => o.status === "pending" && hoursSince(o.created_at) > SLA_HOURS;
 
   return (
     <div className="flex flex-col gap-4">
@@ -50,9 +68,9 @@ export default function OrdersView({ orders, initialId }: { orders: OrderView[];
             {count("pending")} pending · {count("changes_requested")} sent back · {count("approved")} approved · {count("fulfilled")} fulfilled
           </div>
         </div>
-        <div className="flex border border-border-strong bg-surface rounded-lg overflow-hidden">
+        <div className="flex border border-border-strong bg-surface rounded-lg overflow-hidden" role="tablist" aria-label="View">
           {(["split", "kanban"] as const).map((v) => (
-            <button key={v} type="button" onClick={() => setView(v)} className={`border-0 px-[15px] py-2 text-[12.5px] cursor-pointer ${view === v ? "bg-navy text-white font-semibold" : "bg-surface text-slate-dark font-medium"}`}>
+            <button key={v} type="button" role="tab" aria-selected={view === v} onClick={() => setView(v)} className={`border-0 px-[15px] py-2 text-[12.5px] cursor-pointer ${view === v ? "bg-navy text-white font-semibold" : "bg-surface text-slate-dark font-medium"}`}>
               {v === "split" ? "Split view" : "Kanban"}
             </button>
           ))}
@@ -69,6 +87,7 @@ export default function OrdersView({ orders, initialId }: { orders: OrderView[];
                   <span className={`text-xs font-semibold tracking-[.06em] uppercase ${cls}`}>{orderLabel[status]}</span>
                   <span className="font-mono text-[11px] text-slate bg-surface border border-border rounded-full px-2 py-px">{col.length}</span>
                 </div>
+                {col.length === 0 && <div className="text-[12px] text-muted py-2 text-center">Nothing here</div>}
                 {col.map((o) => (
                   <button
                     key={o.id}
@@ -82,7 +101,7 @@ export default function OrdersView({ orders, initialId }: { orders: OrderView[];
                       <span className="font-mono text-[12.5px] font-semibold">{money(o.subtotal)}</span>
                     </div>
                     <div className="text-[13px] font-medium">{o.customer.company_name}</div>
-                    <div className="text-[11.5px] text-slate">{summary(o)} · {shortDateTime(o.created_at)}</div>
+                    <div className="text-[11.5px] text-slate">{summary(o)} · {relativeTime(o.created_at)}</div>
                   </button>
                 ))}
               </div>
@@ -91,32 +110,48 @@ export default function OrdersView({ orders, initialId }: { orders: OrderView[];
         </div>
       )}
 
-      <div className={`grid gap-4 items-start grid-cols-1 ${view === "split" ? "lg:grid-cols-[minmax(240px,320px)_minmax(0,1fr)]" : ""}`}>
+      <div className={`grid gap-4 items-start grid-cols-1 ${view === "split" ? "lg:grid-cols-[minmax(240px,340px)_minmax(0,1fr)]" : ""}`}>
         {view === "split" && (
           <Card className="overflow-hidden">
-            <div className="px-3.5 py-3 border-b border-border text-[13px] font-semibold">Order queue</div>
+            <div className="px-3 py-2.5 border-b border-border flex flex-col gap-2">
+              <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Order no., customer or SKU" aria-label="Search orders" className="w-full border border-border bg-surface-soft rounded-lg px-[11px] py-2 text-[13px] outline-none focus:border-accent focus:bg-surface" />
+              <div className="flex gap-1 flex-wrap">
+                {FILTERS.map(([f, label]) => {
+                  const n = f === "all" ? orders.length : f === "open" ? count("pending") + count("changes_requested") : count(f);
+                  const on = filter === f;
+                  return (
+                    <button key={f} type="button" onClick={() => setFilter(f)} aria-pressed={on} className={`border rounded-full px-2.5 py-1 text-[11.5px] font-medium cursor-pointer flex items-center gap-1.5 ${on ? "bg-navy border-navy text-white" : "bg-surface border-border-strong text-slate-dark hover:border-muted"}`}>
+                      {label}<span className={`font-mono text-[10px] ${on ? "text-[#9fc4f2]" : "text-muted"}`}>{n}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
             <div className="flex flex-col max-h-[640px] overflow-y-auto">
-              {orders.map((o) => {
+              {filtered.length === 0 && <div className="px-4 py-8 text-center text-[13px] text-slate">No orders match.</div>}
+              {filtered.map((o) => {
                 const on = o.id === active?.id;
                 const unread = o.messages.length > 0 && o.messages[o.messages.length - 1].author_role === "customer";
+                const late = overSla(o);
                 return (
                   <button
                     key={o.id}
                     type="button"
                     onClick={() => setSelectedId(o.id)}
-                    className="text-left border-0 border-b border-border-soft px-3.5 py-3 cursor-pointer flex flex-col gap-[5px]"
-                    style={{ borderLeft: `3px solid ${on ? "#2F7DD1" : "transparent"}`, background: on ? "#F5F9FD" : "#fff" }}
+                    aria-current={on ? "true" : undefined}
+                    className="text-left border-0 border-b border-border-soft px-3.5 py-3 cursor-pointer flex flex-col gap-[5px] hover:bg-surface-soft"
+                    style={{ borderLeft: `3px solid ${on ? "#2F7DD1" : "transparent"}`, background: on ? "#F5F9FD" : undefined }}
                   >
                     <div className="flex items-center justify-between gap-2.5">
                       <span className="font-mono text-xs text-navy-hover">{o.order_number}</span>
                       <span className="flex items-center gap-1.5">
-                        {unread && <span title="Customer replied" className="w-2 h-2 rounded-full bg-accent" />}
+                        {unread && <span title="Customer replied" aria-label="Customer replied" className="w-2 h-2 rounded-full bg-accent" />}
                         <OrderBadge status={o.status} />
                       </span>
                     </div>
                     <div className="text-[13px] font-medium">{o.customer.company_name}</div>
                     <div className="flex justify-between gap-2 text-[11.5px] text-slate">
-                      <span>{summary(o)}</span>
+                      <span>{summary(o)} · <span className={late ? "text-danger font-semibold" : ""}>{relativeTime(o.created_at)}{late ? " · over SLA" : ""}</span></span>
                       <span className="font-mono">{money(o.subtotal)}</span>
                     </div>
                   </button>
@@ -133,6 +168,7 @@ export default function OrdersView({ orders, initialId }: { orders: OrderView[];
                 <div className="flex items-center gap-2.5">
                   <span className="font-mono text-[15px] font-semibold">{active.order_number}</span>
                   <OrderBadge status={active.status} />
+                  {overSla(active) && <span className="text-[11px] font-semibold text-danger">Waiting {Math.floor(hoursSince(active.created_at))}h · over {SLA_HOURS}h SLA</span>}
                 </div>
                 <div className="text-base font-semibold mt-1.5">{active.customer.company_name}</div>
                 <div className="text-[12.5px] text-slate mt-0.5">{active.customer.email} · placed {shortDateTime(active.created_at)} · Net 30</div>
@@ -140,18 +176,17 @@ export default function OrdersView({ orders, initialId }: { orders: OrderView[];
               <div className="flex gap-2 flex-wrap">
                 {isOpen && (
                   <>
-                    <Button variant="destructive" onClick={() => act("rejected")} disabled={pending}>Reject</Button>
-                    <Button variant="secondary" onClick={() => setSendBack(true)} disabled={pending}>Send back with comments</Button>
-                    <Button variant="success" onClick={() => act("approved")} disabled={pending}>{pending ? "Saving…" : "Approve order"}</Button>
+                    <Button variant="destructive" onClick={() => setModal("reject")} disabled={pending}>Reject</Button>
+                    <Button variant="secondary" onClick={() => setModal("sendBack")} disabled={pending}>Send back with comments</Button>
+                    <Button variant="success" onClick={() => act("approved", "approved")} disabled={pending}>{pending ? "Saving…" : "Approve order"}</Button>
                   </>
                 )}
-                {active.status === "approved" && <Button onClick={() => act("fulfilled")} disabled={pending}>Mark fulfilled</Button>}
+                {active.status === "approved" && <Button onClick={() => act("fulfilled", "marked fulfilled")} disabled={pending}>Mark fulfilled</Button>}
               </div>
             </div>
             {active.status === "changes_requested" && (
               <div className="mx-4 mt-3 rounded-lg bg-info-bg border border-info-bd px-3 py-2 text-[13px] text-info">Waiting for the customer to accept the proposed changes or reply.</div>
             )}
-            {error && <div className="mx-4 mt-3 rounded-lg bg-danger-bg border border-danger-bd px-3 py-2 text-[13px] text-danger">{error}</div>}
 
             <div className="p-4 grid gap-3 border-b border-border bg-surface-softer" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))" }}>
               {[
@@ -211,17 +246,49 @@ export default function OrdersView({ orders, initialId }: { orders: OrderView[];
             </div>
           </Card>
         ) : (
-          <Card className="p-8 text-center text-[13px] text-slate">No orders yet.</Card>
+          <Card className="p-10 text-center">
+            <div className="text-[13.5px] font-medium">No orders yet</div>
+            <div className="text-[12.5px] text-slate mt-1">Orders submitted from the customer portal will appear here for approval.</div>
+          </Card>
         )}
       </div>
 
-      {sendBack && active && <SendBackModal order={active} onClose={() => setSendBack(false)} />}
+      {modal === "sendBack" && active && <SendBackModal order={active} onClose={() => setModal(null)} />}
+      {modal === "reject" && active && <RejectModal order={active} onClose={() => setModal(null)} />}
     </div>
+  );
+}
+
+function RejectModal({ order, onClose }: { order: OrderView; onClose: () => void }) {
+  const router = useRouter();
+  const toast = useToast();
+  const [reason, setReason] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [busy, start] = useTransition();
+  function submit(e: FormEvent) {
+    e.preventDefault();
+    start(async () => {
+      const res = await rejectOrder(order.id, reason);
+      if (!res.ok) return setError(res.error);
+      toast.push(`${order.order_number} rejected`, "info");
+      router.refresh();
+      onClose();
+    });
+  }
+  return (
+    <Modal title={`Reject ${order.order_number}`} sub="The reason is posted on the order so the customer knows why. If only part of the order is a problem, use “Send back with comments” instead." onClose={onClose}
+      footer={<><Button variant="secondary" type="button" onClick={onClose}>Cancel</Button><Button variant="destructive" type="submit" form="reject" disabled={busy || !reason.trim()}>{busy ? "Rejecting…" : "Reject order"}</Button></>}>
+      <form id="reject" onSubmit={submit} className="p-5 flex flex-col gap-3.5">
+        {error && <p className="rounded-lg bg-danger-bg border border-danger-bd px-3 py-2 text-[13px] text-danger">{error}</p>}
+        <Field label="Reason for customer"><Textarea rows={3} required value={reason} onChange={(e) => setReason(e.target.value)} placeholder="e.g. Account is over its credit limit; please settle the outstanding invoice before reordering." /></Field>
+      </form>
+    </Modal>
   );
 }
 
 function SendBackModal({ order, onClose }: { order: OrderView; onClose: () => void }) {
   const router = useRouter();
+  const toast = useToast();
   const [comment, setComment] = useState("");
   const [qty, setQty] = useState<Record<string, number>>(() => Object.fromEntries(order.items.map((l) => [l.id, l.quantity])));
   const [error, setError] = useState<string | null>(null);
@@ -240,6 +307,7 @@ function SendBackModal({ order, onClose }: { order: OrderView; onClose: () => vo
     start(async () => {
       const res = await sendBackOrder(order.id, comment, qty);
       if (!res.ok) return setError(res.error);
+      toast.push(`${order.order_number} sent back to ${order.customer.company_name}`, "success");
       router.refresh();
       onClose();
     });
@@ -271,8 +339,8 @@ function SendBackModal({ order, onClose }: { order: OrderView; onClose: () => vo
 
         <div>
           <div className="label mb-2">Adjust quantities (optional · set 0 to remove a line)</div>
-          <div className="border border-border rounded-lg overflow-hidden">
-            <table className="w-full border-collapse">
+          <div className="border border-border rounded-lg overflow-x-auto">
+            <table className="w-full border-collapse min-w-[460px]">
               <thead>
                 <tr className="bg-surface-soft">
                   <th className="th">Line</th>
@@ -290,7 +358,7 @@ function SendBackModal({ order, onClose }: { order: OrderView; onClose: () => vo
                     <td className="td text-right">
                       <div className="flex items-center justify-end gap-1.5">
                         {l.stock < l.quantity && <button type="button" onClick={() => setQty((q) => ({ ...q, [l.id]: l.stock }))} className="text-[11px] text-navy-hover bg-transparent border-0 cursor-pointer whitespace-nowrap">use stock</button>}
-                        <Input mono type="number" min="0" step="1" value={qty[l.id]} onChange={(e) => setQty((q) => ({ ...q, [l.id]: Math.max(0, Number(e.target.value) || 0) }))} className="w-[90px] text-right py-1.5" />
+                        <Input mono type="number" min="0" step="1" aria-label={`Available quantity for ${l.name}`} value={qty[l.id]} onChange={(e) => setQty((q) => ({ ...q, [l.id]: Math.max(0, Number(e.target.value) || 0) }))} className="w-[90px] text-right py-1.5" />
                       </div>
                     </td>
                   </tr>

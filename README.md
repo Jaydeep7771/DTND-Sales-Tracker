@@ -49,6 +49,17 @@ when the dev server restarts.
 | `/design-system` | Palette, type, controls and layout rules |
 | `/login` | Email + password sign-in |
 
+## UX conventions
+
+- **Feedback for every action.** Mutations confirm with a toast (bottom-right); errors stay inline next to the form.
+- **No dead controls.** Every button does something; placeholders were removed rather than left inert.
+- **Destructive actions ask why.** Reject requires a reason, which is posted to the order thread. Send back proposes changes instead.
+- **Modals** close on Escape and backdrop click, trap focus, lock page scroll, and slide up as sheets on phones.
+- **Responsive.** Admin sidebar becomes a drawer below 1024px; the portal filter rail collapses behind a "Filters" button below 768px.
+- **Keyboard.** ⌘K / Ctrl+K focuses the admin search (order numbers → orders, anything else → inventory). Visible focus rings everywhere.
+- **Triage cues.** Order queue shows relative time, flags orders over the 4h SLA, and dots orders where the customer replied last.
+- **Loading states** via `loading.tsx` skeletons so navigation never looks frozen.
+
 ## Structure
 
 ```
