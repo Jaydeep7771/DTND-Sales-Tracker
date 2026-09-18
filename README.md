@@ -1,104 +1,75 @@
-# B2B Inventory, Ordering & Tracking Portal (POC)
+# DTND-Sales-Tracker
 
-Next.js App Router + Supabase + Vercel. Zero hosting cost on free tiers.
+B2B inventory, ordering and tracking portal for Dynamic Traders & Distributors.
+Next.js 16 (App Router) + Tailwind v4 + Supabase, deployable to Vercel for free.
 
-## 1. Project initialization
+The UI follows the design prototype in `Dynamic Traders Portal (standalone).html`:
+navy-and-slate admin console, wholesale customer portal, IBM Plex Sans/Mono, PKR pricing.
 
-Run from the parent folder (this directory is `dtnd`). `create-next-app` refuses a non-empty
-directory, so scaffold into a temp name and merge, or run it first on a fresh clone.
+## Run it
 
 ```bash
-npx create-next-app@latest dtnd --typescript --tailwind --eslint --app --src-dir --import-alias "@/*" --use-npm
+npm install
 ```
 
 ```bash
-npm install @supabase/supabase-js @supabase/ssr browser-image-compression resend server-only
+npm run dev
 ```
 
-```bash
-npm install -D supabase
-```
+Open http://localhost:3000. **With no Supabase keys the app runs in demo mode** on
+in-memory sample data (the prototype's catalog, orders and announcements), with a
+"Screens" bar at the top to hop between admin and portal. Mutations work but reset
+when the dev server restarts.
 
-```bash
-cp .env.example .env.local
-```
+## Go live with Supabase
 
-## 2. Database
+1. Create a Supabase project and run `supabase/schema.sql` in the SQL editor. It creates
+   the tables (UUID keys), enums, RLS policies, the `product-images` bucket + policies,
+   the `DT-xxxxx` order-number sequence, and adds `orders` to Realtime.
+2. Copy `.env.example` to `.env.local` and fill in the URL, anon key and service-role key.
+   Add a Resend key if you want welcome emails on customer onboarding.
+3. In Supabase Auth, add your first admin user with user metadata
+   `{"role": "admin", "company_name": "Dynamic Traders"}`. The trigger copies it into `public.users`.
+4. Restart `npm run dev`. Demo mode switches off automatically, `/login` guards both areas,
+   and the admin dashboard receives Realtime toasts when a customer submits an order.
 
-Paste `supabase/schema.sql` into the Supabase SQL editor and run it. It creates the five tables
-(all UUID PKs), enums, RLS policies, the `product-images` storage bucket + policies, and adds
-`orders` to the realtime publication.
+## Screens
 
-Create the first admin in Supabase Auth (Dashboard → Authentication → Add user) with
-user metadata `{"role": "admin", "company_name": "Your Co"}`. The `on_auth_user_created`
-trigger copies that into `public.users`.
+| Route | Screen |
+| --- | --- |
+| `/admin` | Operations overview: metrics, approval queue, low-stock alerts |
+| `/admin/inventory` | SKU table with search, category chips, pagination, **Add product** modal (client-side WebP compression → Storage) |
+| `/admin/orders` | Order queue in split or kanban view; approve / reject / mark fulfilled |
+| `/admin/customers` | Customer list and **Onboard customer** (creates login, emails temp password) |
+| `/admin/cms` | Announcements and FAQs with publish toggles |
+| `/portal` | Catalog with filter rail, 9-per-page "Load more", add to cart |
+| `/portal/checkout` | Review order, delivery details, submit (status `pending`) |
+| `/portal/orders` | Active-order timeline and order history |
+| `/design-system` | Palette, type, controls and layout rules |
+| `/login` | Email + password sign-in |
 
-## 3. Folder structure
+## Structure
 
 ```
 src/
 ├── app/
-│   ├── layout.tsx                  # Root layout (fonts, Tailwind)
-│   ├── page.tsx                    # Redirects to /login or role home
-│   ├── (auth)/
-│   │   └── login/page.tsx          # Email + password sign-in
-│   ├── (admin)/                    # Route group: layout guards role === 'admin'
-│   │   ├── layout.tsx              # Sidebar + realtime new-order toast
-│   │   └── admin/
-│   │       ├── page.tsx            # Dashboard (pending orders, low stock)
-│   │       ├── products/
-│   │       │   ├── page.tsx        # Product table
-│   │       │   ├── new/page.tsx    # <AddProductForm />
-│   │       │   └── [id]/page.tsx   # Edit / archive
-│   │       ├── orders/
-│   │       │   ├── page.tsx        # All orders, filter by status
-│   │       │   └── [id]/page.tsx   # Approve / reject
-│   │       ├── customers/
-│   │       │   ├── page.tsx        # Customer list
-│   │       │   └── new/page.tsx    # Onboard → server action → welcome email
-│   │       └── cms/page.tsx        # Announcements / FAQs CRUD
-│   ├── (customer)/                 # Route group: layout guards role === 'customer'
-│   │   ├── layout.tsx              # Top nav + cart badge
-│   │   └── portal/
-│   │       ├── page.tsx            # Catalog (paginated, lazy images)
-│   │       ├── cart/page.tsx       # Cart → submit order (status 'pending')
-│   │       ├── orders/
-│   │       │   ├── page.tsx        # Order history
-│   │       │   └── [id]/page.tsx   # Order detail + status
-│   │       └── announcements/page.tsx
-│   └── api/
-│       └── customers/route.ts      # (optional) if you prefer Route Handlers over Server Actions
+│   ├── admin/            layout (role guard + shell), page, inventory/, orders/, customers/, cms/
+│   ├── portal/           layout (cart provider + header + banner), page, checkout/, orders/
+│   ├── login/  design-system/  page.tsx (role redirect)
+│   ├── globals.css       design tokens as Tailwind @theme variables
+│   └── layout.tsx        IBM Plex fonts
 ├── components/
-│   ├── admin/AddProductForm.tsx    # ✅ written
-│   ├── admin/OrderNotifications.tsx# Supabase realtime subscription on orders INSERT
-│   ├── customer/ProductGrid.tsx
-│   ├── customer/CartProvider.tsx
-│   └── ui/                         # Buttons, inputs, badges
+│   ├── ui/               Button, Badge, Card, Input, Select, Toggle, Modal, PageHeading
+│   ├── admin/            AdminShell, AddProductModal, InventoryToolbar, OrdersView, CmsManager, OnboardCustomer, OrderNotifications
+│   └── portal/           CartProvider, PortalHeader (+ cart drawer), Catalog, Checkout
 ├── lib/
-│   ├── supabase/client.ts          # ✅ browser client
-│   ├── supabase/server.ts          # ✅ server client (cookies)
-│   ├── supabase/admin.ts           # ✅ service-role client (server only)
-│   ├── image.ts                    # ✅ client-side compression
-│   ├── email.ts                    # Resend welcome email
-│   └── auth.ts                     # getSessionUser(), requireRole()
-├── types/database.ts               # ✅ hand-written; regenerate with supabase gen types
-└── middleware.ts                    # Refresh session cookie, redirect unauthenticated
-supabase/
-└── schema.sql                      # ✅
+│   ├── data.ts           server reads (Supabase or demo store)
+│   ├── actions.ts        server actions: createProduct, setOrderStatus, submitOrder, CMS, onboarding, auth
+│   ├── demo-store.ts     in-memory sample data used when Supabase isn't configured
+│   ├── image.ts          browser-image-compression wrapper
+│   ├── format.ts         money / date / stock-state helpers
+│   └── supabase/         client.ts, server.ts, admin.ts (service role)
+├── proxy.ts              refreshes the Supabase session cookie (live mode)
+└── types/database.ts     table types (regenerate with `supabase gen types`)
+supabase/schema.sql
 ```
-
-## 4. First component
-
-`src/components/admin/AddProductForm.tsx` — compresses the chosen image in a Web Worker
-(WebP, ≤200 KB, ≤1200 px), uploads it to the `product-images` bucket, then inserts the
-product row. If the insert fails the upload is removed so no orphan files remain.
-
-Drop it into `src/app/(admin)/admin/products/new/page.tsx`:
-
-```tsx
-import AddProductForm from "@/components/admin/AddProductForm";
-export default function NewProductPage() {
-  return <AddProductForm />;
-}
-```
-# DTND-Sales-Tracker

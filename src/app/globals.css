@@ -1,0 +1,65 @@
+@import "tailwindcss";
+
+/* Design tokens from the Dynamic Traders design system. */
+@theme {
+  --font-sans: var(--font-plex-sans), Helvetica, Arial, sans-serif;
+  --font-mono: var(--font-plex-mono), ui-monospace, monospace;
+
+  --color-navy: #123a5e;        /* primary buttons, brand */
+  --color-navy-hover: #1c5488;  /* hover, links */
+  --color-accent: #2f7dd1;      /* focus, selection */
+  --color-ink: #0f1b2b;         /* primary text */
+  --color-slate: #64748b;       /* labels, meta */
+  --color-slate-strong: #475569;
+  --color-slate-dark: #334155;
+  --color-muted: #94a3b8;
+  --color-border: #e2e8f0;
+  --color-border-soft: #eef2f6;
+  --color-border-strong: #cbd5e1;
+  --color-canvas: #f4f6f9;
+  --color-canvas-portal: #f7f9fc;
+  --color-surface: #ffffff;
+  --color-surface-soft: #f8fafc;
+  --color-surface-softer: #fcfdfe;
+  --color-sidebar: #12263c;
+  --color-sidebar-line: #23415f;
+  --color-sidebar-card: #16304b;
+  --color-sidebar-text: #a8bdd2;
+  --color-sidebar-muted: #7e9ab8;
+  --color-topbar: #0f1b2b;
+
+  --color-success: #0e7a46;
+  --color-success-bg: #eaf6ef;
+  --color-success-bd: #bfe3ce;
+  --color-warning: #8a5a0b;
+  --color-warning-bg: #fef6e7;
+  --color-warning-bd: #f3dcae;
+  --color-warning-dot: #e6a23c;
+  --color-danger: #b42318;
+  --color-danger-bg: #fef3f2;
+  --color-danger-bd: #f3c6c0;
+  --color-info: #1c5488;
+  --color-info-bg: #f1f6fc;
+  --color-info-bd: #d7e5f5;
+  --color-selected: #eef3f9;
+}
+
+@layer base {
+  html, body { margin: 0; padding: 0; background: var(--color-canvas); }
+  body { font-family: var(--font-sans); color: var(--color-ink); -webkit-font-smoothing: antialiased; }
+  a { color: var(--color-navy-hover); text-decoration: none; }
+  a:hover { color: var(--color-accent); }
+  input, select, button, textarea { font: inherit; }
+  ::selection { background: #cfe0f5; }
+}
+
+@layer components {
+  /* Placeholder "product shot" hatch used wherever an image is missing. */
+  .hatch { background: repeating-linear-gradient(135deg, #f1f5f9 0 9px, #e8eef5 9px 18px); }
+  .hatch-drop { background: repeating-linear-gradient(135deg, #f8fafc 0 8px, #f1f5f9 8px 16px); }
+  /* Section label: 11px / .08em / uppercase / slate / 600 */
+  .label { font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--color-slate); font-weight: 600; }
+  .th { text-align: left; padding: 10px 14px; font-size: 10.5px; letter-spacing: .08em; text-transform: uppercase; color: var(--color-slate); font-weight: 600; border-bottom: 1px solid var(--color-border); white-space: nowrap; }
+  .th-r { text-align: right; }
+  .td { padding: 11px 14px; font-size: 13px; }
+}

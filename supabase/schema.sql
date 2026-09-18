@@ -50,24 +50,36 @@ $$;
 -- ---------- products -------------------------------------------------
 create table public.products (
   id             uuid primary key default gen_random_uuid(),
+  sku            text not null unique,
   name           text not null,
   description    text,
+  category       text not null default 'General',
+  unit_of_measure text not null default 'Each',
   price          numeric(12,2) not null check (price >= 0),
   image_url      text,
   stock_quantity integer not null default 0 check (stock_quantity >= 0),
+  reorder_point  integer not null default 0 check (reorder_point >= 0),
   is_archived    boolean not null default false,
   created_at     timestamptz not null default now(),
   updated_at     timestamptz not null default now()
 );
 create index products_active_idx on public.products (is_archived, created_at desc);
+create index products_category_idx on public.products (category);
 
 -- ---------- orders ---------------------------------------------------
+-- order_number is the human-facing id shown in the UI (DT-24188).
+create sequence public.order_number_seq start 24100;
+
 create table public.orders (
-  id          uuid primary key default gen_random_uuid(),
-  customer_id uuid not null references public.users (id) on delete restrict,
-  status      public.order_status not null default 'pending',
-  created_at  timestamptz not null default now(),
-  updated_at  timestamptz not null default now()
+  id               uuid primary key default gen_random_uuid(),
+  order_number     text not null unique default ('DT-' || nextval('public.order_number_seq')),
+  customer_id      uuid not null references public.users (id) on delete restrict,
+  status           public.order_status not null default 'pending',
+  delivery_address text,
+  required_by      date,
+  note             text,
+  created_at       timestamptz not null default now(),
+  updated_at       timestamptz not null default now()
 );
 create index orders_customer_idx on public.orders (customer_id, created_at desc);
 create index orders_status_idx   on public.orders (status);
@@ -88,6 +100,8 @@ create table public.announcements (
   title      text not null,
   content    text not null,
   type       public.announcement_type not null default 'announcement',
+  priority   integer not null default 1,        -- lower = shown first
+  expires_at timestamptz,                       -- null = no expiry
   is_active  boolean not null default true,
   created_at timestamptz not null default now()
 );
