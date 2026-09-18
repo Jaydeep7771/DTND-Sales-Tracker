@@ -8,12 +8,28 @@ import { usePathname, useRouter } from "next/navigation";
 import { num } from "@/lib/format";
 import { signOut } from "@/lib/actions";
 
-const NAV: [string, string][] = [
-  ["/admin", "Dashboard"],
-  ["/admin/inventory", "Inventory"],
-  ["/admin/orders", "Orders"],
-  ["/admin/customers", "Customers"],
-  ["/admin/cms", "CMS Settings"],
+// 16px line icons (1.75 stroke) so each item stays recognisable when the rail is collapsed.
+const ICONS: Record<string, ReactNode> = {
+  dashboard: <><rect x="3" y="3" width="7" height="9" rx="1.5" /><rect x="14" y="3" width="7" height="5" rx="1.5" /><rect x="14" y="12" width="7" height="9" rx="1.5" /><rect x="3" y="16" width="7" height="5" rx="1.5" /></>,
+  inventory: <><path d="M21 8.5 12 3.5 3 8.5v8l9 5 9-5v-8Z" /><path d="M3 8.5l9 5 9-5" /><path d="M12 13.5v8" /></>,
+  orders: <><path d="M9 4h6l1 3H8l1-3Z" /><rect x="5" y="7" width="14" height="14" rx="2" /><path d="M9 12h6M9 16h4" /></>,
+  customers: <><circle cx="9" cy="8" r="3.5" /><path d="M2.5 20a6.5 6.5 0 0 1 13 0" /><circle cx="17" cy="9" r="2.5" /><path d="M16 15.5a5 5 0 0 1 5.5 4.5" /></>,
+  cms: <><path d="M4 6h16M4 12h10M4 18h13" /><circle cx="18" cy="13" r="2" /></>,
+};
+function Icon({ name }: { name: string }) {
+  return (
+    <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden className="shrink-0">
+      {ICONS[name]}
+    </svg>
+  );
+}
+
+const NAV: [string, string, string][] = [
+  ["/admin", "Dashboard", "dashboard"],
+  ["/admin/inventory", "Inventory", "inventory"],
+  ["/admin/orders", "Orders", "orders"],
+  ["/admin/customers", "Customers", "customers"],
+  ["/admin/cms", "CMS Settings", "cms"],
 ];
 const COLLAPSE_KEY = "dtnd-admin-collapsed";
 
@@ -73,9 +89,10 @@ export default function AdminShell({ children, pendingCount, totalSkus, lowStock
       </div>
 
       <nav className="flex flex-col gap-[3px]" aria-label="Admin">
-        {NAV.map(([href, label]) => {
+        {NAV.map(([href, label, icon]) => {
           const on = href === "/admin" ? path === "/admin" : path.startsWith(href);
           const badge = href === "/admin/orders" && pendingCount > 0 ? pendingCount : null;
+          const mini = collapsed && !drawer;
           return (
             <Link
               key={href}
@@ -83,11 +100,13 @@ export default function AdminShell({ children, pendingCount, totalSkus, lowStock
               title={label}
               aria-current={on ? "page" : undefined}
               onClick={() => setDrawer(false)}
-              className={`flex items-center gap-2.5 rounded-[7px] px-2.5 py-[9px] text-[13px] border-l-[3px] ${on ? "bg-navy-hover text-white font-semibold border-accent hover:text-white" : "text-sidebar-text font-medium border-transparent hover:text-white hover:bg-[#16304b]"}`}
+              className={`relative flex items-center gap-2.5 rounded-[7px] py-[9px] text-[13px] border-l-[3px] ${mini ? "justify-center px-0" : "px-2.5"} ${on ? "bg-navy-hover text-white font-semibold border-accent hover:text-white" : "text-sidebar-text font-medium border-transparent hover:text-white hover:bg-[#16304b]"}`}
             >
-              <span className={`w-2 h-2 shrink-0 rounded-sm ${on ? "bg-[#7fb4ec]" : "bg-[#5a7591]"}`} />
-              {(!collapsed || drawer) && <span className="whitespace-nowrap flex-1">{label}</span>}
-              {(!collapsed || drawer) && badge && <span className="font-mono text-[10.5px] bg-danger text-white rounded-full px-1.5 py-px">{badge}</span>}
+              <span className={on ? "text-[#9fc4f2]" : "text-[#8ea6c0]"}><Icon name={icon} /></span>
+              {!mini && <span className="whitespace-nowrap flex-1">{label}</span>}
+              {badge && (
+                <span className={`font-mono text-[10.5px] bg-danger text-white rounded-full px-1.5 py-px ${mini ? "absolute -top-1 right-1.5 text-[9.5px] px-1" : ""}`} aria-label={`${badge} pending orders`}>{badge}</span>
+              )}
             </Link>
           );
         })}
