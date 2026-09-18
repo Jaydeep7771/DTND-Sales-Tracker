@@ -56,22 +56,23 @@ export default function OrdersView({ orders, initialId }: { orders: OrderView[];
 
   const summary = (o: OrderView) => `${o.items.length} line${o.items.length === 1 ? "" : "s"} · ${num(o.items.reduce((a, l) => a + l.quantity, 0))} units`;
   const count = (s: OrderStatus) => orders.filter((o) => o.status === s).length;
-  const isOpen = active && (active.status === "pending" || active.status === "changes_requested");
   const overSla = (o: OrderView) => o.status === "pending" && hoursSince(o.created_at) > SLA_HOURS;
 
+  const lastFromCustomer = (o: OrderView) => o.messages.length > 0 && o.messages[o.messages.length - 1].author_role === "customer";
+  const openCount = count("pending") + count("changes_requested");
+
   return (
-    <div className="flex flex-col gap-4">
-      <div className="flex items-end justify-between gap-4 flex-wrap">
+    <div className="flex flex-col gap-5">
+      {/* Page header: title on the left, view toggle on the right. Counts live in the filter, not repeated here. */}
+      <div className="flex items-center justify-between gap-4 flex-wrap">
         <div>
-          <h1 className="text-2xl font-semibold tracking-[-.01em]">Order management</h1>
-          <div className="text-[13px] text-slate mt-1">
-            {count("pending")} pending · {count("changes_requested")} sent back · {count("approved")} approved · {count("fulfilled")} fulfilled
-          </div>
+          <h1 className="text-2xl font-semibold tracking-[-.01em]">Orders</h1>
+          <div className="text-[13px] text-slate mt-1">{openCount === 0 ? "Nothing waiting on you." : `${openCount} waiting on you`}{count("approved") ? ` · ${count("approved")} approved to fulfil` : ""}</div>
         </div>
-        <div className="flex border border-border-strong bg-surface rounded-lg overflow-hidden" role="tablist" aria-label="View">
+        <div className="flex border border-border bg-surface rounded-lg overflow-hidden" role="tablist" aria-label="View">
           {(["split", "kanban"] as const).map((v) => (
-            <button key={v} type="button" role="tab" aria-selected={view === v} onClick={() => setView(v)} className={`border-0 px-[15px] py-2 text-[12.5px] cursor-pointer ${view === v ? "bg-navy text-white font-semibold" : "bg-surface text-slate-dark font-medium"}`}>
-              {v === "split" ? "Split view" : "Kanban"}
+            <button key={v} type="button" role="tab" aria-selected={view === v} onClick={() => setView(v)} className={`border-0 px-3.5 py-[7px] text-[12.5px] cursor-pointer ${view === v ? "bg-navy text-white font-semibold" : "bg-surface text-slate hover:text-ink"}`}>
+              {v === "split" ? "List" : "Board"}
             </button>
           ))}
         </div>
@@ -89,16 +90,10 @@ export default function OrdersView({ orders, initialId }: { orders: OrderView[];
                 </div>
                 {col.length === 0 && <div className="text-[12px] text-muted py-2 text-center">Nothing here</div>}
                 {col.map((o) => (
-                  <button
-                    key={o.id}
-                    type="button"
-                    onClick={() => setSelectedId(o.id)}
-                    className="text-left bg-surface border rounded-lg px-3 py-[11px] cursor-pointer flex flex-col gap-1.5 hover:border-accent"
-                    style={{ borderColor: o.id === active?.id ? "#2F7DD1" : "#E2E8F0", borderLeft: `3px solid ${TONE[o.status]}` }}
-                  >
+                  <button key={o.id} type="button" onClick={() => setSelectedId(o.id)} className="text-left bg-surface border rounded-lg px-3 py-[11px] cursor-pointer flex flex-col gap-1.5 hover:border-accent" style={{ borderColor: o.id === active?.id ? "#2F7DD1" : "#E2E8F0", borderLeft: `3px solid ${TONE[o.status]}` }}>
                     <div className="flex items-center justify-between gap-2">
                       <span className="font-mono text-xs text-navy-hover">{o.order_number}</span>
-                      <span className="font-mono text-[12.5px] font-semibold">{money(o.subtotal)}</span>
+                      <span className="font-mono text-[12.5px] font-semibold">{money(o.total)}</span>
                     </div>
                     <div className="text-[13px] font-medium">{o.customer.company_name}</div>
                     <div className="text-[11.5px] text-slate">{summary(o)} · {relativeTime(o.created_at)}</div>
@@ -110,28 +105,28 @@ export default function OrdersView({ orders, initialId }: { orders: OrderView[];
         </div>
       )}
 
-      <div className={`grid gap-4 items-start grid-cols-1 ${view === "split" ? "lg:grid-cols-[minmax(240px,340px)_minmax(0,1fr)]" : ""}`}>
+      <div className={`grid gap-5 items-start grid-cols-1 ${view === "split" ? "lg:grid-cols-[300px_minmax(0,1fr)] xl:grid-cols-[340px_minmax(0,1fr)]" : ""}`}>
         {view === "split" && (
-          <Card className="overflow-hidden">
-            <div className="px-3 py-2.5 border-b border-border flex flex-col gap-2">
-              <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Order no., customer or SKU" aria-label="Search orders" className="w-full border border-border bg-surface-soft rounded-lg px-[11px] py-2 text-[13px] outline-none focus:border-accent focus:bg-surface" />
-              <div className="flex gap-1 flex-wrap">
+          <Card className="overflow-hidden lg:sticky lg:top-[92px]">
+            {/* One search box; status as a compact select so the queue never wraps. */}
+            <div className="p-3 border-b border-border flex gap-2">
+              <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search orders" aria-label="Search orders" className="flex-1 min-w-0 border border-border bg-surface-soft rounded-lg px-3 py-2 text-[13px] outline-none focus:border-accent focus:bg-surface" />
+              <select value={filter} onChange={(e) => setFilter(e.target.value as Filter)} aria-label="Status" className="border border-border bg-surface rounded-lg px-2.5 py-2 text-[12.5px] outline-none text-slate-dark max-w-[150px]">
                 {FILTERS.map(([f, label]) => {
-                  const n = f === "all" ? orders.length : f === "open" ? count("pending") + count("changes_requested") : count(f);
-                  const on = filter === f;
-                  return (
-                    <button key={f} type="button" onClick={() => setFilter(f)} aria-pressed={on} className={`border rounded-full px-2.5 py-1 text-[11.5px] font-medium cursor-pointer flex items-center gap-1.5 ${on ? "bg-navy border-navy text-white" : "bg-surface border-border-strong text-slate-dark hover:border-muted"}`}>
-                      {label}<span className={`font-mono text-[10px] ${on ? "text-[#9fc4f2]" : "text-muted"}`}>{n}</span>
-                    </button>
-                  );
+                  const n = f === "all" ? orders.length : f === "open" ? openCount : count(f);
+                  return <option key={f} value={f}>{label} ({n})</option>;
                 })}
-              </div>
+              </select>
             </div>
-            <div className="flex flex-col max-h-[640px] overflow-y-auto">
-              {filtered.length === 0 && <div className="px-4 py-8 text-center text-[13px] text-slate">No orders match.</div>}
+            <div className="flex flex-col max-h-[calc(100vh-200px)] overflow-y-auto">
+              {filtered.length === 0 && (
+                <div className="px-4 py-10 text-center">
+                  <div className="text-[13px] font-medium">No orders here</div>
+                  <div className="text-[12px] text-slate mt-1">Try another status or clear the search.</div>
+                </div>
+              )}
               {filtered.map((o) => {
                 const on = o.id === active?.id;
-                const unread = o.messages.length > 0 && o.messages[o.messages.length - 1].author_role === "customer";
                 const late = overSla(o);
                 return (
                   <button
@@ -139,20 +134,20 @@ export default function OrdersView({ orders, initialId }: { orders: OrderView[];
                     type="button"
                     onClick={() => setSelectedId(o.id)}
                     aria-current={on ? "true" : undefined}
-                    className="text-left border-0 border-b border-border-soft px-3.5 py-3 cursor-pointer flex flex-col gap-[5px] hover:bg-surface-soft"
-                    style={{ borderLeft: `3px solid ${on ? "#2F7DD1" : "transparent"}`, background: on ? "#F5F9FD" : undefined }}
+                    className={`text-left border-0 border-b border-border-soft px-4 py-3 cursor-pointer flex flex-col gap-1 transition-colors ${on ? "bg-[#F5F9FD]" : "bg-surface hover:bg-surface-soft"}`}
+                    style={{ boxShadow: on ? "inset 3px 0 0 #2F7DD1" : undefined }}
                   >
-                    <div className="flex items-center justify-between gap-2.5">
-                      <span className="font-mono text-xs text-navy-hover">{o.order_number}</span>
-                      <span className="flex items-center gap-1.5">
-                        {unread && <span title="Customer replied" aria-label="Customer replied" className="w-2 h-2 rounded-full bg-accent" />}
-                        <OrderBadge status={o.status} />
-                      </span>
+                    <div className="flex items-center justify-between gap-3">
+                      <span className="text-[13.5px] font-semibold truncate">{o.customer.company_name}</span>
+                      <span className="font-mono text-[13px] font-medium shrink-0">{money(o.total)}</span>
                     </div>
-                    <div className="text-[13px] font-medium">{o.customer.company_name}</div>
-                    <div className="flex justify-between gap-2 text-[11.5px] text-slate">
-                      <span>{summary(o)} · <span className={late ? "text-danger font-semibold" : ""}>{relativeTime(o.created_at)}{late ? " · over SLA" : ""}</span></span>
-                      <span className="font-mono">{money(o.subtotal)}</span>
+                    <div className="flex items-center justify-between gap-3 text-[11.5px] text-slate">
+                      <span className="font-mono">{o.order_number}<span className="font-sans"> · {summary(o)}</span></span>
+                      <span className="flex items-center gap-1.5 shrink-0">
+                        {lastFromCustomer(o) && <span title="Customer replied" className="w-1.5 h-1.5 rounded-full bg-accent" />}
+                        {late ? <span className="text-danger font-semibold">{relativeTime(o.created_at)}</span> : <span>{relativeTime(o.created_at)}</span>}
+                        <span className="w-1.5 h-1.5 rounded-full" style={{ background: TONE[o.status] }} title={orderLabel[o.status]} />
+                      </span>
                     </div>
                   </button>
                 );
@@ -162,92 +157,18 @@ export default function OrdersView({ orders, initialId }: { orders: OrderView[];
         )}
 
         {active ? (
-          <Card className="overflow-hidden">
-            <div className="p-4 border-b border-border flex gap-3.5 flex-wrap items-start justify-between">
-              <div>
-                <div className="flex items-center gap-2.5">
-                  <span className="font-mono text-[15px] font-semibold">{active.order_number}</span>
-                  <OrderBadge status={active.status} />
-                  {overSla(active) && <span className="text-[11px] font-semibold text-danger">Waiting {Math.floor(hoursSince(active.created_at))}h · over {SLA_HOURS}h SLA</span>}
-                </div>
-                <div className="text-base font-semibold mt-1.5">{active.customer.company_name}</div>
-                <div className="text-[12.5px] text-slate mt-0.5">{active.customer.email} · placed {shortDateTime(active.created_at)} · Net 30</div>
-              </div>
-              <div className="flex gap-2 flex-wrap">
-                {isOpen && (
-                  <>
-                    <Button variant="destructive" onClick={() => setModal("reject")} disabled={pending}>Reject</Button>
-                    <Button variant="secondary" onClick={() => setModal("sendBack")} disabled={pending}>Send back with comments</Button>
-                    <Button variant="success" onClick={() => act("approved", "approved")} disabled={pending}>{pending ? "Saving…" : "Approve order"}</Button>
-                  </>
-                )}
-                {active.status === "approved" && <Button onClick={() => act("fulfilled", "marked fulfilled")} disabled={pending}>Mark fulfilled</Button>}
-              </div>
-            </div>
-            {active.status === "changes_requested" && (
-              <div className="mx-4 mt-3 rounded-lg bg-info-bg border border-info-bd px-3 py-2 text-[13px] text-info">Waiting for the customer to accept the proposed changes or reply.</div>
-            )}
-
-            <div className="p-4 grid gap-3 border-b border-border bg-surface-softer" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))" }}>
-              {[
-                ["Payment terms", "Net 30 · PKR"],
-                ["Deliver to", active.delivery_address ?? "—"],
-                ["Required by", active.required_by ? shortDate(active.required_by) : "—"],
-                ["Customer note", active.note ?? "—"],
-              ].map(([k, v]) => (
-                <div key={k}>
-                  <div className="label text-[10.5px]">{k}</div>
-                  <div className="text-[13.5px] font-medium mt-[3px]">{v}</div>
-                </div>
-              ))}
-            </div>
-
-            <div className="overflow-x-auto">
-              <table className="w-full border-collapse min-w-[520px]">
-                <thead>
-                  <tr className="bg-surface-soft">
-                    <th className="th px-4">Line item</th>
-                    <th className="th th-r px-4">Qty</th>
-                    <th className="th th-r px-4">Locked price</th>
-                    <th className="th th-r px-4">Line total</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {active.items.map((l) => (
-                    <tr key={l.id} className="border-b border-border-soft">
-                      <td className="px-4 py-[11px]">
-                        <div className="text-[13px] font-medium">{l.name}</div>
-                        <div className="font-mono text-[11px] text-slate">
-                          {l.sku} · stock <span className={l.stock < l.quantity ? "text-danger font-semibold" : ""}>{num(l.stock)}</span>
-                          {l.stock < l.quantity && <span className="text-danger"> · short by {num(l.quantity - l.stock)}</span>}
-                        </div>
-                      </td>
-                      <td className="px-4 py-[11px] text-right font-mono text-[13px]">{num(l.quantity)}</td>
-                      <td className="px-4 py-[11px] text-right font-mono text-[13px]">{money(l.price_at_purchase)}</td>
-                      <td className="px-4 py-[11px] text-right font-mono text-[13px] font-semibold">{money(l.quantity * l.price_at_purchase)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-            <div className="px-4 py-3.5 flex justify-end gap-7 bg-surface-soft border-b border-border">
-              <div className="text-right">
-                <div className="label">Subtotal</div>
-                <div className="font-mono text-sm mt-[3px]">{money(active.subtotal)}</div>
-              </div>
-              <div className="text-right">
-                <div className="label">Order total</div>
-                <div className="font-mono text-xl font-semibold mt-0.5">{money(active.total)}</div>
-              </div>
-            </div>
-
-            <div className="p-4">
-              <OrderThread orderId={active.id} messages={active.messages} me="admin" canReply onReply={adminReplyToOrder} customerName={active.customer.company_name} />
-            </div>
-          </Card>
+          <OrderDetail
+            order={active}
+            pending={pending}
+            overSla={overSla(active)}
+            onApprove={() => act("approved", "approved")}
+            onFulfil={() => act("fulfilled", "marked fulfilled")}
+            onSendBack={() => setModal("sendBack")}
+            onReject={() => setModal("reject")}
+          />
         ) : (
-          <Card className="p-10 text-center">
-            <div className="text-[13.5px] font-medium">No orders yet</div>
+          <Card className="p-12 text-center">
+            <div className="text-[14px] font-medium">No orders yet</div>
             <div className="text-[12.5px] text-slate mt-1">Orders submitted from the customer portal will appear here for approval.</div>
           </Card>
         )}
@@ -256,6 +177,140 @@ export default function OrdersView({ orders, initialId }: { orders: OrderView[];
       {modal === "sendBack" && active && <SendBackModal order={active} onClose={() => setModal(null)} />}
       {modal === "reject" && active && <RejectModal order={active} onClose={() => setModal(null)} />}
     </div>
+  );
+}
+
+/** Right-hand panel: header with total + actions, then Details / Conversation tabs. */
+function OrderDetail({ order, pending, overSla, onApprove, onFulfil, onSendBack, onReject }: {
+  order: OrderView; pending: boolean; overSla: boolean;
+  onApprove: () => void; onFulfil: () => void; onSendBack: () => void; onReject: () => void;
+}) {
+  const [tab, setTab] = useState<"details" | "conversation">("details");
+  const isOpen = order.status === "pending" || order.status === "changes_requested";
+  const unread = order.messages.length > 0 && order.messages[order.messages.length - 1].author_role === "customer";
+  const short = order.items.filter((l) => l.stock < l.quantity);
+
+  // Reset to details when a different order is selected.
+  const [seenId, setSeenId] = useState(order.id);
+  if (seenId !== order.id) { setSeenId(order.id); setTab(unread ? "conversation" : "details"); }
+
+  return (
+    <Card className="overflow-hidden">
+      {/* Header */}
+      <div className="px-6 pt-5 pb-4 flex gap-5 flex-wrap items-start justify-between">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2.5 flex-wrap">
+            <h2 className="text-lg font-semibold tracking-[-.01em] truncate">{order.customer.company_name}</h2>
+            <OrderBadge status={order.status} />
+          </div>
+          <div className="text-[12.5px] text-slate mt-1 flex items-center gap-1.5 flex-wrap">
+            <span className="font-mono text-navy-hover">{order.order_number}</span>
+            <span>·</span><span>placed {shortDateTime(order.created_at)}</span>
+            <span>·</span><span>{order.customer.email}</span>
+            {overSla && <><span>·</span><span className="text-danger font-semibold">waiting {Math.floor(hoursSince(order.created_at))}h, over SLA</span></>}
+          </div>
+        </div>
+        <div className="text-right shrink-0">
+          <div className="label">Order total</div>
+          <div className="font-mono text-[26px] font-semibold tracking-[-.02em] leading-none mt-1">{money(order.total)}</div>
+          <div className="text-[11px] text-muted mt-1">incl. 5% tax · {order.items.length} line{order.items.length === 1 ? "" : "s"}</div>
+        </div>
+      </div>
+
+      {/* Action bar: one row, primary on the right. */}
+      {(isOpen || order.status === "approved") && (
+        <div className="px-6 pb-4 flex items-center gap-2 flex-wrap">
+          {isOpen && short.length > 0 && (
+            <span className="text-[12px] text-warning bg-warning-bg border border-warning-bd rounded-md px-2.5 py-1 mr-auto">
+              {short.length === 1 ? "1 line" : `${short.length} lines`} short on stock
+            </span>
+          )}
+          <div className="flex gap-2 ml-auto">
+            {isOpen && (
+              <>
+                <Button variant="destructive" onClick={onReject} disabled={pending}>Reject</Button>
+                <Button variant="secondary" onClick={onSendBack} disabled={pending}>Send back</Button>
+                <Button variant="success" onClick={onApprove} disabled={pending}>{pending ? "Saving…" : "Approve"}</Button>
+              </>
+            )}
+            {order.status === "approved" && <Button onClick={onFulfil} disabled={pending}>Mark fulfilled</Button>}
+          </div>
+        </div>
+      )}
+      {order.status === "changes_requested" && (
+        <div className="mx-6 mb-4 rounded-lg bg-info-bg border border-info-bd px-3 py-2 text-[12.5px] text-info">Sent back. Waiting for the customer to accept the proposed changes or reply.</div>
+      )}
+
+      {/* Tabs */}
+      <div className="px-6 border-b border-border flex gap-6" role="tablist">
+        {([["details", "Details"], ["conversation", `Conversation${order.messages.length ? ` · ${order.messages.length}` : ""}`]] as const).map(([id, label]) => (
+          <button key={id} type="button" role="tab" aria-selected={tab === id} onClick={() => setTab(id)} className={`relative bg-transparent border-0 px-0 py-3 text-[13px] cursor-pointer flex items-center gap-1.5 ${tab === id ? "text-ink font-semibold" : "text-slate hover:text-ink"}`}>
+            {label}
+            {id === "conversation" && unread && <span className="w-1.5 h-1.5 rounded-full bg-accent" />}
+            {tab === id && <span className="absolute left-0 right-0 -bottom-px h-[2px] bg-navy" />}
+          </button>
+        ))}
+      </div>
+
+      {tab === "details" ? (
+        <>
+          <div className="overflow-x-auto">
+            <table className="w-full border-collapse min-w-[560px]">
+              <thead>
+                <tr>
+                  <th className="th px-6 border-b-0">Line item</th>
+                  <th className="th th-r px-6 border-b-0">Qty</th>
+                  <th className="th th-r px-6 border-b-0">Unit price</th>
+                  <th className="th th-r px-6 border-b-0">Total</th>
+                </tr>
+              </thead>
+              <tbody>
+                {order.items.map((l) => (
+                  <tr key={l.id} className="border-t border-border-soft">
+                    <td className="px-6 py-3">
+                      <div className="text-[13.5px] font-medium">{l.name}</div>
+                      <div className="font-mono text-[11px] text-slate mt-0.5">
+                        {l.sku}
+                        {l.stock < l.quantity ? <span className="text-danger"> · only {num(l.stock)} in stock</span> : <span className="text-muted"> · {num(l.stock)} in stock</span>}
+                      </div>
+                    </td>
+                    <td className="px-6 py-3 text-right font-mono text-[13px]">{num(l.quantity)}</td>
+                    <td className="px-6 py-3 text-right font-mono text-[13px] text-slate-strong whitespace-nowrap">{money(l.price_at_purchase)}</td>
+                    <td className="px-6 py-3 text-right font-mono text-[13px] font-semibold whitespace-nowrap">{money(l.quantity * l.price_at_purchase)}</td>
+                  </tr>
+                ))}
+                <tr className="border-t border-border">
+                  <td colSpan={3} className="px-6 py-2.5 text-right text-[12.5px] text-slate">Subtotal</td>
+                  <td className="px-6 py-2.5 text-right font-mono text-[13px] whitespace-nowrap">{money(order.subtotal)}</td>
+                </tr>
+                <tr>
+                  <td colSpan={3} className="px-6 pb-4 text-right text-[12.5px] text-slate">Sales tax 5%</td>
+                  <td className="px-6 pb-4 text-right font-mono text-[13px] whitespace-nowrap">{money(order.total - order.subtotal)}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <div className="px-6 py-4 border-t border-border bg-surface-softer grid gap-x-8 gap-y-3" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))" }}>
+            {[
+              ["Deliver to", order.delivery_address ?? "—"],
+              ["Required by", order.required_by ? shortDate(order.required_by) : "—"],
+              ["Terms", "Net 30 · PKR"],
+              ["Customer note", order.note ?? "—"],
+            ].map(([k, v]) => (
+              <div key={k} className="min-w-0">
+                <div className="label text-[10.5px]">{k}</div>
+                <div className="text-[13px] mt-1 text-slate-dark">{v}</div>
+              </div>
+            ))}
+          </div>
+        </>
+      ) : (
+        <div className="px-6 py-5">
+          <OrderThread orderId={order.id} messages={order.messages} me="admin" canReply onReply={adminReplyToOrder} customerName={order.customer.company_name} />
+        </div>
+      )}
+    </Card>
   );
 }
 
