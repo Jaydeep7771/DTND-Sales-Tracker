@@ -10,7 +10,7 @@ import "server-only";
 import { createClient } from "@/lib/supabase/server";
 import { demo } from "@/lib/demo-store";
 import { isDemo } from "@/lib/data";
-import { assertBalanced, round2, type JournalEntryInput, type SystemKey } from "@/lib/accounting";
+import { assertBalanced, businessDate, round2, type JournalEntryInput, type SystemKey } from "@/lib/accounting";
 import type { AccountRow } from "@/types/database";
 
 export type PostResult = { ok: true; entryId: string; entryNo: string } | { ok: false; error: string };
@@ -119,7 +119,7 @@ export async function reverseEntry(entryId: string, reason: string): Promise<Pos
     if (!original) return { ok: false, error: "Entry not found." };
     const lines = demo.acc.lines.filter((l) => l.entry_id === entryId);
     const res = await postEntry({
-      entry_date: new Date().toISOString().slice(0, 10),
+      entry_date: businessDate(),
       narration: `Reversal of ${original.entry_no}: ${reason}`,
       source_type: "manual",
       lines: lines.map((l) => ({ account_id: l.account_id, debit: l.credit, credit: l.debit, party_id: l.party_id, memo: l.memo ?? undefined })),
@@ -136,7 +136,7 @@ export async function reverseEntry(entryId: string, reason: string): Promise<Pos
   const { data: lines } = await supabase.from("journal_lines").select("*").eq("entry_id", entryId);
   if (!original || !lines?.length) return { ok: false, error: "Entry not found." };
   return postEntry({
-    entry_date: new Date().toISOString().slice(0, 10),
+    entry_date: businessDate(),
     narration: `Reversal of ${original.entry_no}: ${reason}`,
     source_type: "manual",
     lines: lines.map((l) => ({ account_id: l.account_id, debit: l.credit, credit: l.debit, party_id: l.party_id, memo: l.memo ?? undefined })),

@@ -12,6 +12,11 @@ import type { AccountRow, CompanySettings, JournalEntryRow } from "@/types/datab
 import type { Product, Announcement, UserProfile, OrderView, OrderLine, OrderMessage, ProductQuery, ProductPage, CategoryCount, DashboardMetrics, OrderStatus } from "@/lib/types";
 
 /** Cookie that picks which demo customer the portal acts as (set by the invite flow). */
+import { settlementOf } from "@/lib/accounting";
+import type { InvoiceView, InvoiceLineView } from "@/lib/types";
+import type { Invoice, InvoiceItem, InvoicePayment } from "@/types/database";
+
+/** Cookie that picks which demo customer the portal acts as (set by the invite flow). */
 export const DEMO_CUSTOMER_COOKIE = "dtnd-demo-customer";
 
 export const isDemo =
@@ -36,6 +41,7 @@ function buildOrder(
     customer: { id: customer.id, company_name: customer.company_name ?? customer.email, email: customer.email },
     items,
     messages,
+    invoices: [],
     subtotal,
     total: Math.round(subtotal * (1 + TAX_RATE)),
   };
@@ -94,7 +100,7 @@ export async function getLowStock(limit = 5): Promise<Product[]> {
 export async function getOrders(opts: { customerId?: string } = {}): Promise<OrderView[]> {
   if (isDemo) {
     const cid = opts.customerId;
-    return demo.orders
+    const built = demo.orders
       .filter((o) => !cid || o.customer_id === cid)
       .sort((a, b) => b.created_at.localeCompare(a.created_at))
       .map((o) => {
@@ -105,6 +111,7 @@ export async function getOrders(opts: { customerId?: string } = {}): Promise<Ord
         });
         return buildOrder(o, customer, items, demo.messages.filter((m) => m.order_id === o.id));
       });
+    return withInvoices(built);
   }
 
   const supabase = await createClient();
@@ -120,14 +127,22 @@ export async function getOrders(opts: { customerId?: string } = {}): Promise<Ord
     items: { id: string; product_id: string; quantity: number; price_at_purchase: number; product: { name: string; sku: string; stock_quantity: number } }[];
     messages: OrderMessage[];
   };
-  return ((data ?? []) as unknown as Row[]).map((o) =>
+  return withInvoices(((data ?? []) as unknown as Row[]).map((o) =>
     buildOrder(
       o,
       o.customer,
       o.items.map((it) => ({ id: it.id, product_id: it.product_id, name: it.product.name, sku: it.product.sku, quantity: it.quantity, price_at_purchase: it.price_at_purchase, stock: it.product.stock_quantity })),
       [...o.messages].sort((a, b) => a.created_at.localeCompare(b.created_at)),
     ),
-  );
+  ));
+}
+
+/** Attaches invoices to orders in one pass rather than per row. */
+async function withInvoices(orders: OrderView[]): Promise<OrderView[]> {
+  if (orders.length === 0) return orders;
+  const invoices = await getInvoices();
+  for (const o of orders) o.invoices = invoices.filter((i) => i.order_id === o.id);
+  return orders;
 }
 
 export async function getOrder(id: string): Promise<OrderView | null> {
@@ -256,4 +271,113 @@ export async function getJournal(limit = 100): Promise<JournalEntryRow[]> {
   const { data } = await (await createClient())
     .from("journal_entries").select("*").order("entry_date", { ascending: false }).limit(limit);
   return data ?? [];
+}
+
+// ---------------------------------------------------------------- invoices
+
+function buildInvoice(
+  inv: Invoice,
+  items: InvoiceItem[],
+  payments: InvoicePayment[],
+  customer: { id: string; company_name: string | null; email: string },
+  orderNumber: string | null,
+): InvoiceView {
+  const paid = payments.reduce((a, p) => a + Number(p.amount), 0);
+  const lines: InvoiceLineView[] = items
+    .sort((a, b) => a.sort_order - b.sort_order)
+    .map((i) => ({
+      id: i.id,
+      order_item_id: i.order_item_id,
+      sku: i.sku,
+      name: i.name,
+      unit_of_measure: i.unit_of_measure,
+      quantity: i.quantity,
+      unit_price: Number(i.unit_price),
+      line_total: Number(i.line_total),
+    }));
+  return {
+    id: inv.id,
+    invoice_number: inv.invoice_number,
+    order_id: inv.order_id,
+    order_number: orderNumber,
+    type: inv.type,
+    status: inv.status,
+    customer: { id: customer.id, company_name: customer.company_name ?? customer.email, email: customer.email },
+    seller: inv.seller ?? {},
+    buyer: inv.buyer ?? {},
+    currency: inv.currency,
+    tax_rate: Number(inv.tax_rate),
+    subtotal: Number(inv.subtotal),
+    discount: Number(inv.discount),
+    freight: Number(inv.freight),
+    tax_amount: Number(inv.tax_amount),
+    total: Number(inv.total),
+    issue_date: inv.issue_date,
+    due_date: inv.due_date,
+    terms_days: inv.terms_days,
+    notes: inv.notes,
+    items: lines,
+    payments,
+    paid,
+    balance: Number(inv.total) - paid,
+    settlement: settlementOf(inv.status, Number(inv.total), paid, inv.due_date),
+    pdf_path: inv.pdf_path,
+    issued_at: inv.issued_at,
+    created_at: inv.created_at,
+  };
+}
+
+export async function getInvoices(opts: { customerId?: string; orderId?: string } = {}): Promise<InvoiceView[]> {
+  if (isDemo) {
+    return demo.acc.invoices
+      .filter((i) => (!opts.customerId || i.customer_id === opts.customerId) && (!opts.orderId || i.order_id === opts.orderId))
+      .sort((a, b) => b.created_at.localeCompare(a.created_at))
+      .map((i) => {
+        const customer = demo.customers.find((c) => c.id === i.customer_id)!;
+        const order = demo.orders.find((o) => o.id === i.order_id);
+        return buildInvoice(
+          i,
+          demo.acc.invoiceItems.filter((x) => x.invoice_id === i.id),
+          demo.acc.payments.filter((p) => p.invoice_id === i.id),
+          customer,
+          order?.order_number ?? null,
+        );
+      });
+  }
+
+  const supabase = await createClient();
+  let query = supabase
+    .from("invoices")
+    .select("*, customer:users!invoices_customer_id_fkey(id, company_name, email), items:invoice_items(*), payments:invoice_payments(*), order:orders(order_number)")
+    .order("created_at", { ascending: false });
+  if (opts.customerId) query = query.eq("customer_id", opts.customerId);
+  if (opts.orderId) query = query.eq("order_id", opts.orderId);
+  const { data, error } = await query;
+  if (error) throw error;
+  type Row = Invoice & {
+    customer: { id: string; company_name: string | null; email: string };
+    items: InvoiceItem[];
+    payments: InvoicePayment[];
+    order: { order_number: string } | null;
+  };
+  return ((data ?? []) as unknown as Row[]).map((i) =>
+    buildInvoice(i, i.items ?? [], i.payments ?? [], i.customer, i.order?.order_number ?? null),
+  );
+}
+
+export async function getInvoice(id: string): Promise<InvoiceView | null> {
+  return (await getInvoices()).find((i) => i.id === id) ?? null;
+}
+
+/** How much of each order line is still uninvoiced, for partial dispatch. */
+export async function getRemainingToInvoice(orderId: string): Promise<Map<string, number>> {
+  const invoices = (await getInvoices({ orderId })).filter((i) => i.status !== "void");
+  const used = new Map<string, number>();
+  for (const inv of invoices) {
+    for (const l of inv.items) {
+      if (!l.order_item_id) continue;
+      used.set(l.order_item_id, (used.get(l.order_item_id) ?? 0) + l.quantity);
+    }
+  }
+  return used;
 }

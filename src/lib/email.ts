@@ -8,6 +8,7 @@ export interface Email {
   subject: string;
   html: string;
   text: string;
+  attachments?: { filename: string; content: string }[];   // base64
 }
 
 export interface SendResult {
@@ -94,7 +95,7 @@ This invitation was sent to ${input.to}. If you weren't expecting it, you can ig
 
 export async function sendEmail(email: Email): Promise<SendResult> {
   const key = process.env.RESEND_API_KEY;
-  if (!key) return { sent: false, reason: "RESEND_API_KEY is not set, so no email was sent. Share the link manually." };
+  if (!key) return { sent: false, reason: "RESEND_API_KEY is not set, so no email was sent." };
   try {
     const { Resend } = await import("resend");
     const { error } = await new Resend(key).emails.send({
@@ -103,10 +104,76 @@ export async function sendEmail(email: Email): Promise<SendResult> {
       subject: email.subject,
       html: email.html,
       text: email.text,
+      attachments: email.attachments,
     });
     if (error) return { sent: false, reason: error.message };
     return { sent: true };
   } catch (err) {
     return { sent: false, reason: err instanceof Error ? err.message : "Email provider error." };
   }
+}
+
+/** Invoice delivery email. The PDF rides along as an attachment. */
+export function invoiceEmail(input: {
+  to: string;
+  company: string;
+  invoiceNumber: string;
+  total: number;
+  currency: string;
+  dueDate: string | null;
+  orderNumber: string | null;
+  senderName: string;
+  bankDetails: string | null;
+}): Email {
+  const amount = `${input.currency} ${Math.round(input.total).toLocaleString("en-US")}`;
+  const due = input.dueDate
+    ? new Date(input.dueDate).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" })
+    : "on receipt";
+  const subject = `Invoice ${input.invoiceNumber} from ${BRAND} — ${amount}`;
+  const orderLine = input.orderNumber ? `\nThis covers order ${input.orderNumber}.` : "";
+
+  const text = `Hello ${input.company},
+
+Please find attached invoice ${input.invoiceNumber} for ${amount}, due ${due}.${orderLine}
+
+You can also view it any time by signing in to the portal under Invoices.
+${input.bankDetails ? `\nPayment details:\n${input.bankDetails}\n` : ""}
+If anything on the invoice looks wrong, reply to this email and we will sort it out before the due date.
+
+Kind regards,
+${input.senderName}
+Accounts, ${BRAND}`;
+
+  const html = `<!doctype html>
+<html><body style="margin:0;padding:0;background:#f4f6f9;font-family:'IBM Plex Sans',Helvetica,Arial,sans-serif;color:#0f1b2b">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f4f6f9;padding:32px 16px"><tr><td align="center">
+    <table role="presentation" width="560" cellpadding="0" cellspacing="0" style="max-width:560px;width:100%;background:#fff;border:1px solid #e2e8f0;border-radius:12px;overflow:hidden">
+      <tr><td style="background:#12263c;padding:20px 28px;color:#fff;font-size:15px;font-weight:600">${BRAND}
+        <div style="font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:#7e9ab8;font-weight:600;margin-top:2px">Accounts</div>
+      </td></tr>
+      <tr><td style="padding:26px 28px 6px">
+        <h1 style="margin:0 0 12px;font-size:19px;font-weight:600">Invoice ${escape(input.invoiceNumber)}</h1>
+        <p style="margin:0 0 18px;font-size:14px;line-height:1.6;color:#334155">Hello ${escape(input.company)}, your invoice is attached as a PDF.${input.orderNumber ? ` It covers order ${escape(input.orderNumber)}.` : ""}</p>
+        <table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="background:#f8fafc;border-radius:8px;margin-bottom:18px">
+          <tr>
+            <td style="padding:14px 16px">
+              <div style="font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:#64748b;font-weight:600">Amount due</div>
+              <div style="font-family:'IBM Plex Mono',monospace;font-size:22px;font-weight:600;margin-top:4px">${amount}</div>
+            </td>
+            <td style="padding:14px 16px;text-align:right">
+              <div style="font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:#64748b;font-weight:600">Due</div>
+              <div style="font-size:14px;font-weight:600;margin-top:6px">${due}</div>
+            </td>
+          </tr>
+        </table>
+        ${input.bankDetails ? `<div style="font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:#64748b;font-weight:600;margin-bottom:5px">Payment details</div><div style="font-family:'IBM Plex Mono',monospace;font-size:12px;line-height:1.6;color:#334155;margin-bottom:18px;white-space:pre-line">${escape(input.bankDetails)}</div>` : ""}
+        <p style="margin:0 0 6px;font-size:13.5px;line-height:1.6;color:#334155">If anything looks wrong, reply to this email and we will sort it out before the due date.</p>
+        <p style="margin:16px 0 0;font-size:13.5px;line-height:1.5">Kind regards,<br><strong>${escape(input.senderName)}</strong><br><span style="color:#64748b">Accounts, ${BRAND}</span></p>
+      </td></tr>
+      <tr><td style="background:#fcfdfe;border-top:1px solid #e2e8f0;padding:14px 28px;font-size:11px;color:#94a3b8">Sent to ${escape(input.to)}. The invoice PDF is attached to this email.</td></tr>
+    </table>
+  </td></tr></table>
+</body></html>`;
+
+  return { to: input.to, subject, html, text };
 }

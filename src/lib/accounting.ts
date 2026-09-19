@@ -117,3 +117,57 @@ export const POSTING_RULES = [
   { event: "Purchase bill recorded", debit: ["Inventory", "Input Sales Tax"], credit: ["Accounts Payable"] },
   { event: "Payment to supplier", debit: ["Accounts Payable"], credit: ["Bank or Cash"] },
 ] as const;
+
+/**
+ * Invoice arithmetic in one place so the draft editor, the posting engine
+ * and the PDF can never disagree. Freight is treated as part of the value
+ * of supply and is therefore taxed; discount reduces it.
+ */
+export function computeInvoiceTotals(
+  items: { quantity: number; unit_price: number }[],
+  discount: number,
+  freight: number,
+  taxRate: number,
+) {
+  const subtotal = round2(items.reduce((a, l) => a + l.quantity * l.unit_price, 0));
+  const taxable = round2(subtotal - discount + freight);
+  const tax_amount = round2(taxable * taxRate);
+  return { subtotal, taxable, tax_amount, total: round2(taxable + tax_amount) };
+}
+
+export type Settlement = "draft" | "open" | "part_paid" | "paid" | "overdue" | "void";
+
+export function settlementOf(
+  status: InvoiceStatus, total: number, paid: number, dueDate: string | null,
+): Settlement {
+  if (status === "draft") return "draft";
+  if (status === "void") return "void";
+  if (paid >= total - 0.005) return "paid";
+  if (paid > 0) return "part_paid";
+  if (dueDate && new Date(dueDate) < new Date(new Date().toDateString())) return "overdue";
+  return "open";
+}
+
+export const SETTLEMENT_LABEL: Record<Settlement, string> = {
+  draft: "Draft", open: "Awaiting payment", part_paid: "Part paid",
+  paid: "Paid", overdue: "Overdue", void: "Void",
+};
+
+/**
+ * Dates on financial documents must follow the business's calendar, not the
+ * server's. A Vercel box runs in UTC, so `toISOString()` would date a Karachi
+ * invoice raised at 01:00 to the previous day. Tax documents cannot be a day out.
+ */
+export const BUSINESS_TZ = "Asia/Karachi";
+
+export function businessDate(when: Date = new Date(), timeZone = BUSINESS_TZ): string {
+  // en-CA formats as YYYY-MM-DD.
+  return new Intl.DateTimeFormat("en-CA", { timeZone, year: "numeric", month: "2-digit", day: "2-digit" }).format(when);
+}
+
+/** Adds whole days to a business date, staying in the business calendar. */
+export function addDays(isoDate: string, days: number): string {
+  const d = new Date(`${isoDate}T12:00:00Z`);        // midday avoids DST edges
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
+}

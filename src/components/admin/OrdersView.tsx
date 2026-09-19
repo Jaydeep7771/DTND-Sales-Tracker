@@ -7,6 +7,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { Button, Card, Field, Input, Modal, OrderBadge, orderLabel, Textarea } from "@/components/ui";
 import { useToast } from "@/components/ui/Toast";
 import OrderThread from "@/components/OrderThread";
+import InvoicePanel from "@/components/admin/InvoicePanel";
 import { adminReplyToOrder, rejectOrder, sendBackOrder, setOrderStatus } from "@/lib/actions";
 import { hoursSince, money, num, relativeTime, shortDateTime, shortDate } from "@/lib/format";
 import type { OrderView, OrderStatus } from "@/lib/types";
@@ -22,7 +23,7 @@ type Filter = "open" | OrderStatus | "all";
 const FILTERS: [Filter, string][] = [["open", "Needs action"], ["pending", "Pending"], ["changes_requested", "Sent back"], ["approved", "Approved"], ["fulfilled", "Fulfilled"], ["all", "All"]];
 const SLA_HOURS = 4;
 
-export default function OrdersView({ orders, initialId, canWrite }: { orders: OrderView[]; initialId?: string; canWrite: boolean }) {
+export default function OrdersView({ orders, initialId, canWrite, canInvoice }: { orders: OrderView[]; initialId?: string; canWrite: boolean; canInvoice: boolean }) {
   const router = useRouter();
   const params = useSearchParams();
   const toast = useToast();
@@ -166,6 +167,7 @@ export default function OrdersView({ orders, initialId, canWrite }: { orders: Or
             onSendBack={() => setModal("sendBack")}
             onReject={() => setModal("reject")}
             canWrite={canWrite}
+            canInvoice={canInvoice}
           />
         ) : (
           <Card className="p-12 text-center">
@@ -182,11 +184,12 @@ export default function OrdersView({ orders, initialId, canWrite }: { orders: Or
 }
 
 /** Right-hand panel: header with total + actions, then Details / Conversation tabs. */
-function OrderDetail({ order, pending, overSla, onApprove, onFulfil, onSendBack, onReject, canWrite }: {
-  order: OrderView; pending: boolean; overSla: boolean; canWrite: boolean;
+function OrderDetail({ order, pending, overSla, onApprove, onFulfil, onSendBack, onReject, canWrite, canInvoice }: {
+  order: OrderView; pending: boolean; overSla: boolean; canWrite: boolean; canInvoice: boolean;
   onApprove: () => void; onFulfil: () => void; onSendBack: () => void; onReject: () => void;
 }) {
-  const [tab, setTab] = useState<"details" | "conversation">("details");
+  const [tab, setTab] = useState<"details" | "invoice" | "conversation">("details");
+  const invoiced = order.invoices.filter((i) => i.status !== "void");
   const isOpen = order.status === "pending" || order.status === "changes_requested";
   const unread = order.messages.length > 0 && order.messages[order.messages.length - 1].author_role === "customer";
   const short = order.items.filter((l) => l.stock < l.quantity);
@@ -244,7 +247,11 @@ function OrderDetail({ order, pending, overSla, onApprove, onFulfil, onSendBack,
 
       {/* Tabs */}
       <div className="px-6 border-b border-border flex gap-6" role="tablist">
-        {([["details", "Details"], ["conversation", `Conversation${order.messages.length ? ` · ${order.messages.length}` : ""}`]] as const).map(([id, label]) => (
+        {([
+          ["details", "Details"],
+          ["invoice", `Invoice${invoiced.length ? ` · ${invoiced.length}` : ""}`],
+          ["conversation", `Conversation${order.messages.length ? ` · ${order.messages.length}` : ""}`],
+        ] as const).map(([id, label]) => (
           <button key={id} type="button" role="tab" aria-selected={tab === id} onClick={() => setTab(id)} className={`relative bg-transparent border-0 px-0 py-3 text-[13px] cursor-pointer flex items-center gap-1.5 ${tab === id ? "text-ink font-semibold" : "text-slate hover:text-ink"}`}>
             {label}
             {id === "conversation" && unread && <span className="w-1.5 h-1.5 rounded-full bg-accent" />}
@@ -253,7 +260,11 @@ function OrderDetail({ order, pending, overSla, onApprove, onFulfil, onSendBack,
         ))}
       </div>
 
-      {tab === "details" ? (
+      {tab === "invoice" ? (
+        <div className="px-6 py-5">
+          <InvoicePanel order={order} canInvoice={canInvoice} />
+        </div>
+      ) : tab === "details" ? (
         <>
           <div className="overflow-x-auto">
             <table className="w-full border-collapse min-w-[560px]">

@@ -71,6 +71,16 @@ The posting rules are listed on the Chart of accounts screen for your accountant
 
 Invoice PDFs go to a private bucket, unlike product images. An invoice exposes pricing and tax identity, so downloads are served through a signed URL to the owner or to staff.
 
+## Invoicing
+
+Finance raises invoices from the **Invoice** tab on any approved order, so the order context stays in view. The draft prefills with whatever is still uninvoiced, which means a part shipment can be billed now and the balance later. Issuing does four things in one step: allocates the gapless number, freezes the seller and buyer snapshot, posts the ledger entry, and renders the PDF. Then it emails the customer with the PDF attached.
+
+Posting the ledger happens **before** the invoice is marked issued, so a posting failure leaves an editable draft rather than an unposted document. Issued invoices cannot be edited. A mistake is voided, which posts a reversing entry and never reuses the number.
+
+The PDF is rendered from the frozen snapshot rather than from live order data, so re-downloading an old invoice gives the same document the customer received. Download is served by an authorized route rather than an unguessable URL: staff may fetch any invoice, a customer only their own issued ones.
+
+Dates on financial documents use the business calendar, set to Asia/Karachi. A server running in UTC would otherwise date an invoice raised at 01:00 in Karachi to the previous day, which is not acceptable on a tax document.
+
 ## Email
 
 Invite emails are sent through [Resend](https://resend.com) whenever `RESEND_API_KEY` is set, in demo mode too. Set `EMAIL_FROM` to a verified sender (e.g. `Dynamic Traders <orders@yourdomain.com>`) and `NEXT_PUBLIC_APP_URL` to the public site URL so links resolve. Without a key, the admin still gets the link and a preview of the exact message in the portal. The template lives in `src/lib/email.ts` (HTML + plain text).
