@@ -483,3 +483,39 @@ export async function loadCatalogPage(q: { q?: string; category?: string; page: 
   const { getProducts } = await import("@/lib/data");
   return getProducts({ ...q, perPage: 9 });
 }
+
+// ---------------------------------------------------------------- customer billing
+export interface CustomerBilling {
+  company_name: string;
+  billing_address: string;
+  ntn: string;
+  strn: string;
+}
+
+/**
+ * Billing and tax identity. Finance owns this because invoices print it,
+ * and an invoice already issued keeps its own frozen copy regardless.
+ */
+export async function updateCustomerBilling(customerId: string, input: CustomerBilling): Promise<Result> {
+  const denied = await denyUnless("customer:billing"); if (denied) return denied;
+  if (!input.company_name.trim()) return { ok: false, error: "Company name is required." };
+
+  const patch = {
+    company_name: input.company_name.trim(),
+    billing_address: input.billing_address.trim() || null,
+    ntn: input.ntn.trim() || null,
+    strn: input.strn.trim() || null,
+  };
+
+  if (isDemo) {
+    const c = demo.customers.find((c) => c.id === customerId);
+    if (!c) return { ok: false, error: "Customer not found." };
+    Object.assign(c, patch);
+  } else {
+    const { error } = await (await createClient()).from("users").update(patch).eq("id", customerId);
+    if (error) return { ok: false, error: error.message };
+  }
+  revalidatePath("/admin/customers");
+  revalidatePath(`/admin/customers/${customerId}`);
+  return { ok: true };
+}

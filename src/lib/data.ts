@@ -381,3 +381,105 @@ export async function getRemainingToInvoice(orderId: string): Promise<Map<string
   }
   return used;
 }
+
+// ---------------------------------------------------------------- customer detail
+export interface LedgerRow {
+  id: string;
+  entry_no: string;
+  entry_date: string;
+  narration: string;
+  account: string;
+  debit: number;
+  credit: number;
+  balance: number;   // running receivable balance
+}
+
+export interface CustomerDetail {
+  customer: UserProfile;
+  orders: OrderView[];
+  invoices: InvoiceView[];
+  ledger: LedgerRow[];
+  stats: {
+    ordersPlaced: number;
+    ordersOpen: number;
+    invoiced: number;      // total issued, excluding void
+    outstanding: number;   // unpaid portion
+    overdue: number;       // unpaid and past due
+    lastOrderAt: string | null;
+  };
+}
+
+export async function getCustomerById(id: string): Promise<UserProfile | null> {
+  if (isDemo) return demo.customers.find((c) => c.id === id) ?? null;
+  const { data } = await (await createClient()).from("users").select("*").eq("id", id).maybeSingle();
+  return data ?? null;
+}
+
+/** The customer's receivable subledger, oldest first with a running balance. */
+export async function getCustomerLedger(customerId: string): Promise<LedgerRow[]> {
+  const accounts = await getAccounts();
+  const nameOf = new Map(accounts.map((a) => [a.id, `${a.code} ${a.name}`]));
+
+  let rows: { id: string; entry_id: string; account_id: string; debit: number; credit: number }[];
+  let entries: Map<string, { entry_no: string; entry_date: string; narration: string }>;
+
+  if (isDemo) {
+    rows = demo.acc.lines.filter((l) => l.party_id === customerId);
+    entries = new Map(demo.acc.entries.map((e) => [e.id, e]));
+  } else {
+    const { data } = await (await createClient())
+      .from("journal_lines")
+      .select("id, entry_id, account_id, debit, credit, entry:journal_entries(entry_no, entry_date, narration)")
+      .eq("party_id", customerId);
+    type R = { id: string; entry_id: string; account_id: string; debit: number; credit: number; entry: { entry_no: string; entry_date: string; narration: string } | null };
+    const list = (data ?? []) as unknown as R[];
+    rows = list;
+    entries = new Map(list.filter((r) => r.entry).map((r) => [r.entry_id, r.entry!]));
+  }
+
+  let balance = 0;
+  return rows
+    .map((l) => ({ l, e: entries.get(l.entry_id) }))
+    .filter((x) => x.e)
+    .sort((a, b) => a.e!.entry_date.localeCompare(b.e!.entry_date) || a.e!.entry_no.localeCompare(b.e!.entry_no))
+    .map(({ l, e }) => {
+      balance += Number(l.debit) - Number(l.credit);
+      return {
+        id: l.id,
+        entry_no: e!.entry_no,
+        entry_date: e!.entry_date,
+        narration: e!.narration,
+        account: nameOf.get(l.account_id) ?? "—",
+        debit: Number(l.debit),
+        credit: Number(l.credit),
+        balance,
+      };
+    });
+}
+
+export async function getCustomerDetail(id: string): Promise<CustomerDetail | null> {
+  const customer = await getCustomerById(id);
+  if (!customer) return null;
+
+  const [orders, invoices, ledger] = await Promise.all([
+    getOrders({ customerId: id }),
+    getInvoices({ customerId: id }),
+    getCustomerLedger(id),
+  ]);
+
+  const live = invoices.filter((i) => i.status === "issued");
+  return {
+    customer,
+    orders,
+    invoices,
+    ledger,
+    stats: {
+      ordersPlaced: orders.length,
+      ordersOpen: orders.filter((o) => o.status === "pending" || o.status === "changes_requested" || o.status === "approved").length,
+      invoiced: live.reduce((a, i) => a + i.total, 0),
+      outstanding: live.reduce((a, i) => a + i.balance, 0),
+      overdue: live.filter((i) => i.settlement === "overdue").reduce((a, i) => a + i.balance, 0),
+      lastOrderAt: orders[0]?.created_at ?? null,
+    },
+  };
+}

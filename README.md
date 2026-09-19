@@ -40,6 +40,7 @@ when the dev server restarts.
 | `/admin` | Operations overview: metrics, approval queue, low-stock alerts |
 | `/admin/inventory` | SKU table with search, category chips, pagination, **Add product** modal (client-side WebP compression → Storage) |
 | `/admin/orders` | Order queue in split or kanban view; approve / **send back with comments and adjusted quantities** / reject / mark fulfilled, plus a per-order conversation thread |
+| `/admin/customers/[id]` | Customer detail: receivables tiles, invoices, orders, the customer ledger with running balance, editable billing and tax identity, and portal access |
 | `/admin/customers` | Customer list with invite status and the live invite link (copy / open / resend email / new link), and **Onboard customer** which creates the account, generates the single-use link and emails it |
 | `/invite/[token]` | Customer opens the invite link, sets a password, and lands in the catalog |
 | `/admin/cms` | Announcements and FAQs with publish toggles |

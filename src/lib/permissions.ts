@@ -11,7 +11,7 @@ import type { UserRole } from "@/types/database";
 export type Capability =
   | "order:read" | "order:write"
   | "product:read" | "product:write"
-  | "customer:read" | "customer:write"
+  | "customer:read" | "customer:write" | "customer:billing"
   | "cms:write"
   | "invoice:read" | "invoice:write"
   | "payment:write"
@@ -21,7 +21,7 @@ export type Capability =
   | "staff:invite";
 
 const FINANCE: Capability[] = [
-  "order:read", "product:read", "customer:read",
+  "order:read", "product:read", "customer:read", "customer:billing",
   "invoice:read", "invoice:write", "payment:write",
   "ledger:read", "ledger:post", "report:read", "settings:finance",
 ];
@@ -29,7 +29,7 @@ const FINANCE: Capability[] = [
 export const CAPABILITIES: Record<UserRole, readonly Capability[]> = {
   admin: [
     "order:read", "order:write", "product:read", "product:write",
-    "customer:read", "customer:write", "cms:write",
+    "customer:read", "customer:write", "customer:billing", "cms:write",
     "invoice:read", "invoice:write", "payment:write",
     "ledger:read", "ledger:post", "report:read",
     "settings:finance", "staff:invite",
