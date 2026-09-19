@@ -5,6 +5,10 @@ import { cookies } from "next/headers";
 import { createClient } from "@/lib/supabase/server";
 import { demo, DEMO_CUSTOMER_EMAIL } from "@/lib/demo-store";
 import { TAX_RATE } from "@/lib/types";
+import { isStaff } from "@/lib/permissions";
+import { DEMO_ROLE_COOKIE } from "@/lib/demo-store";
+import type { AccountBalance } from "@/lib/accounting";
+import type { AccountRow, CompanySettings, JournalEntryRow } from "@/types/database";
 import type { Product, Announcement, UserProfile, OrderView, OrderLine, OrderMessage, ProductQuery, ProductPage, CategoryCount, DashboardMetrics, OrderStatus } from "@/lib/types";
 
 /** Cookie that picks which demo customer the portal acts as (set by the invite flow). */
@@ -181,4 +185,75 @@ export async function getDashboardMetrics(): Promise<DashboardMetrics> {
     totalSkus: products.catalogTotal,
     categories: cats.length,
   };
+}
+
+// ---------------------------------------------------------------- staff / accounting
+
+/**
+ * The signed-in staff member. In demo mode the console acts as whichever
+ * persona the role cookie names, defaulting to the operations admin.
+ */
+export async function getCurrentStaff(): Promise<UserProfile | null> {
+  if (isDemo) {
+    const role = (await cookies()).get(DEMO_ROLE_COOKIE)?.value;
+    return demo.staff.find((s) => s.role === role) ?? demo.staff[0] ?? null;
+  }
+  const user = await getCurrentUser();
+  return user && isStaff(user.role) ? user : null;
+}
+
+export async function getCompanySettings(): Promise<CompanySettings> {
+  if (isDemo) return demo.acc.settings;
+  const { data } = await (await createClient()).from("company_settings").select("*").eq("id", true).single();
+  return data as CompanySettings;
+}
+
+export async function getAccounts(): Promise<AccountRow[]> {
+  const rows = isDemo ? demo.acc.accounts : ((await (await createClient()).from("accounts").select("*")).data ?? []);
+  return [...rows].sort((a, b) => a.code.localeCompare(b.code));
+}
+
+/**
+ * Trial balance. Computed from journal lines only, never from stored
+ * totals, so it cannot drift away from the ledger.
+ */
+export async function getTrialBalance(): Promise<AccountBalance[]> {
+  const accounts = await getAccounts();
+  const totals = new Map<string, { debit: number; credit: number }>();
+
+  if (isDemo) {
+    for (const l of demo.acc.lines) {
+      const t = totals.get(l.account_id) ?? { debit: 0, credit: 0 };
+      t.debit += Number(l.debit);
+      t.credit += Number(l.credit);
+      totals.set(l.account_id, t);
+    }
+  } else {
+    const { data } = await (await createClient()).from("journal_lines").select("account_id, debit, credit");
+    for (const l of data ?? []) {
+      const t = totals.get(l.account_id) ?? { debit: 0, credit: 0 };
+      t.debit += Number(l.debit);
+      t.credit += Number(l.credit);
+      totals.set(l.account_id, t);
+    }
+  }
+
+  return accounts.map((a) => {
+    const t = totals.get(a.id) ?? { debit: 0, credit: 0 };
+    const debitNormal = a.type === "asset" || a.type === "expense";
+    return {
+      ...a,
+      system_key: a.system_key as AccountBalance["system_key"],
+      total_debit: t.debit,
+      total_credit: t.credit,
+      balance: debitNormal ? t.debit - t.credit : t.credit - t.debit,
+    };
+  });
+}
+
+export async function getJournal(limit = 100): Promise<JournalEntryRow[]> {
+  if (isDemo) return demo.acc.entries.slice(0, limit);
+  const { data } = await (await createClient())
+    .from("journal_entries").select("*").order("entry_date", { ascending: false }).limit(limit);
+  return data ?? [];
 }

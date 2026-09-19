@@ -2,7 +2,8 @@ import Link from "next/link";
 import { Badge, Button, Card, PageHeading, stockTone } from "@/components/ui";
 import { AddProductButton, InventoryFilters } from "@/components/admin/InventoryToolbar";
 import EditProductButton from "@/components/admin/EditProductButton";
-import { getCategories, getProducts, isDemo } from "@/lib/data";
+import { getCategories, getCurrentStaff, getProducts, isDemo } from "@/lib/data";
+import { can } from "@/lib/permissions";
 import { money, num, stockState } from "@/lib/format";
 
 const PER_PAGE = 9;
@@ -11,10 +12,12 @@ export default async function InventoryPage({ searchParams }: { searchParams: Pr
   const sp = await searchParams;
   const page = Number(sp.page ?? 1);
   const showArchived = sp.archived === "1";
-  const [products, categories] = await Promise.all([
+  const [staff, products, categories] = await Promise.all([
+    getCurrentStaff(),
     getProducts({ q: sp.q, category: sp.category, page, perPage: PER_PAGE, includeArchived: showArchived }),
     getCategories(),
   ]);
+  const canWrite = can(staff?.role, "product:write");
   const from = products.total === 0 ? 0 : (products.page - 1) * PER_PAGE + 1;
   const to = Math.min(products.page * PER_PAGE, products.total);
   const pageHref = (n: number) => {
@@ -34,7 +37,7 @@ export default async function InventoryPage({ searchParams }: { searchParams: Pr
       <PageHeading
         title="Inventory"
         sub={`${num(products.catalogTotal)} active SKUs across ${categories.length} categories`}
-        actions={<AddProductButton categories={categories.map((c) => c.name)} demo={isDemo} />}
+        actions={canWrite ? <AddProductButton categories={categories.map((c) => c.name)} demo={isDemo} /> : undefined}
       />
 
       <Card className="overflow-hidden">
@@ -80,7 +83,7 @@ export default async function InventoryPage({ searchParams }: { searchParams: Pr
                       <span className="block text-[10.5px] text-muted font-normal">reorder at {p.reorder_point}</span>
                     </td>
                     <td className="td"><Badge tone={stockTone[st]}>{st}</Badge></td>
-                    <td className="td text-right whitespace-nowrap"><EditProductButton product={p} /></td>
+                    <td className="td text-right whitespace-nowrap">{canWrite && <EditProductButton product={p} />}</td>
                   </tr>
                 );
               })}

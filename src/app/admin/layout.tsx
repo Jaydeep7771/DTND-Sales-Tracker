@@ -2,22 +2,26 @@ import { redirect } from "next/navigation";
 import AdminShell from "@/components/admin/AdminShell";
 import OrderNotifications from "@/components/admin/OrderNotifications";
 import ScreenSwitcher from "@/components/ScreenSwitcher";
-import { getCurrentUser, getDashboardMetrics, isDemo } from "@/lib/data";
-import { DEMO_ADMIN } from "@/lib/demo-store";
+import { getCurrentStaff, getDashboardMetrics, isDemo } from "@/lib/data";
+import { ROLE_LABEL } from "@/lib/permissions";
 
 export const dynamic = "force-dynamic";
 
+function initialsOf(name: string): string {
+  return name.split(/\s+/).map((w) => w[0]).join("").slice(0, 2).toUpperCase();
+}
+
 export default async function AdminLayout({ children }: { children: React.ReactNode }) {
-  // Role guard (live mode only; demo mode is open for review).
-  let admin = DEMO_ADMIN;
+  // Staff guard. Customers never reach the console; in demo mode the
+  // persona comes from the role cookie so both roles can be reviewed.
+  const staff = await getCurrentStaff();
   if (!isDemo) {
-    const user = await getCurrentUser();
-    if (!user) redirect("/login");
-    if (user.role !== "admin") redirect("/portal");
-    const name = user.company_name ?? user.email;
-    admin = { name, title: "Operations admin", initials: name.split(/\s+/).map((w) => w[0]).join("").slice(0, 2).toUpperCase() };
+    if (!staff) redirect("/login");
+    if (staff.role === "customer") redirect("/portal");
   }
 
+  const role = staff?.role ?? "admin";
+  const name = staff?.company_name ?? staff?.email ?? "Operations";
   const m = await getDashboardMetrics();
   const topOffset = isDemo ? 37 : 0;
 
@@ -25,7 +29,15 @@ export default async function AdminLayout({ children }: { children: React.ReactN
     <>
       {isDemo && <ScreenSwitcher />}
       {!isDemo && <OrderNotifications />}
-      <AdminShell pendingCount={m.pendingApprovals} totalSkus={m.totalSkus} lowStockCount={m.lowStockCount} admin={admin} topOffset={topOffset} demo={isDemo}>
+      <AdminShell
+        role={role}
+        pendingCount={m.pendingApprovals}
+        totalSkus={m.totalSkus}
+        lowStockCount={m.lowStockCount}
+        admin={{ name, title: ROLE_LABEL[role], initials: initialsOf(name) }}
+        topOffset={topOffset}
+        demo={isDemo}
+      >
         {children}
       </AdminShell>
     </>

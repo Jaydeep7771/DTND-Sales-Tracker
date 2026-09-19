@@ -2,6 +2,7 @@
 // Supabase keys are not configured so the app is runnable out of the box.
 // State lives on globalThis so it survives Next.js dev HMR reloads.
 import type { Product, Announcement, UserProfile, OrderStatus, OrderMessage } from "@/types/database";
+import { seedAccounting, type DemoAccounting } from "@/lib/demo-accounting";
 
 interface DemoOrder {
   id: string;
@@ -21,6 +22,8 @@ interface DemoState {
   orders: DemoOrder[];
   announcements: Announcement[];
   messages: OrderMessage[];
+  staff: UserProfile[];
+  acc: DemoAccounting;
   nextOrderNumber: number;
 }
 
@@ -83,7 +86,12 @@ function seed(): DemoState {
     ["Bahria Trade House", "ali@bahriatrade.pk"],
     ["Indus Motors Depot", "depot@indusmotors.pk"],
     ["Gulberg Builders Mart", "mart@gulbergbm.pk"],
-  ].map(([company, email]) => ({ id: uuid(email), email, role: "customer" as const, company_name: company, invite_token: null, invited_at: now, activated_at: now, created_at: now }));
+  ].map(([company, email]) => ({ id: uuid(email), email, role: "customer" as const, company_name: company, billing_address: "Warehouse 3, SITE Area, Karachi", ntn: null, strn: null, invite_token: null, invited_at: now, activated_at: now, created_at: now }));
+
+  const staff: UserProfile[] = [
+    { id: uuid("admin"), email: "rashid@dynamictraders.pk", role: "admin", company_name: "Rashid Khan", billing_address: null, ntn: null, strn: null, invite_token: null, invited_at: now, activated_at: now, created_at: now },
+    { id: uuid("finance"), email: "accounts@dynamictraders.pk", role: "finance", company_name: "Nadia Aslam", billing_address: null, ntn: null, strn: null, invite_token: null, invited_at: now, activated_at: now, created_at: now },
+  ];
   const byEmail = (e: string) => customers.find((c) => c.email === e)!;
 
   // [name, sku, qty, price]
@@ -125,11 +133,11 @@ function seed(): DemoState {
     { id: uuid("f4"), title: "Do you deliver outside Sindh?", content: "Yes, freight is quoted at approval.", type: "faq", priority: 4, expires_at: null, is_active: true, created_at: now },
   ];
 
-  return { products, customers, orders, announcements, messages: [], nextOrderNumber: 24189 };
+  return { products, customers, orders, announcements, messages: [], staff, acc: seedAccounting(uuid), nextOrderNumber: 24189 };
 }
 
 // Bump when DemoState changes shape so HMR-preserved state is reseeded.
-const DEMO_VERSION = 2;
+const DEMO_VERSION = 3;
 const g = globalThis as unknown as { __dtndDemo?: DemoState; __dtndDemoVersion?: number };
 if (!g.__dtndDemo || g.__dtndDemoVersion !== DEMO_VERSION) {
   g.__dtndDemo = seed();
@@ -140,6 +148,8 @@ export const demo: DemoState = g.__dtndDemo;
 /** The customer the portal acts as in demo mode. */
 export const DEMO_CUSTOMER_EMAIL = "imran@meezanhw.pk";
 export const DEMO_ADMIN = { name: "Rashid Khan", title: "Operations admin", initials: "RK" };
+/** Cookie naming which staff persona the demo console acts as. */
+export const DEMO_ROLE_COOKIE = "dtnd-demo-role";
 /** Stable id for the demo admin, used as message author. */
 export const DEMO_ADMIN_ID = uuid("admin");
 

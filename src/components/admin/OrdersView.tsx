@@ -22,7 +22,7 @@ type Filter = "open" | OrderStatus | "all";
 const FILTERS: [Filter, string][] = [["open", "Needs action"], ["pending", "Pending"], ["changes_requested", "Sent back"], ["approved", "Approved"], ["fulfilled", "Fulfilled"], ["all", "All"]];
 const SLA_HOURS = 4;
 
-export default function OrdersView({ orders, initialId }: { orders: OrderView[]; initialId?: string }) {
+export default function OrdersView({ orders, initialId, canWrite }: { orders: OrderView[]; initialId?: string; canWrite: boolean }) {
   const router = useRouter();
   const params = useSearchParams();
   const toast = useToast();
@@ -165,6 +165,7 @@ export default function OrdersView({ orders, initialId }: { orders: OrderView[];
             onFulfil={() => act("fulfilled", "marked fulfilled")}
             onSendBack={() => setModal("sendBack")}
             onReject={() => setModal("reject")}
+            canWrite={canWrite}
           />
         ) : (
           <Card className="p-12 text-center">
@@ -181,8 +182,8 @@ export default function OrdersView({ orders, initialId }: { orders: OrderView[];
 }
 
 /** Right-hand panel: header with total + actions, then Details / Conversation tabs. */
-function OrderDetail({ order, pending, overSla, onApprove, onFulfil, onSendBack, onReject }: {
-  order: OrderView; pending: boolean; overSla: boolean;
+function OrderDetail({ order, pending, overSla, onApprove, onFulfil, onSendBack, onReject, canWrite }: {
+  order: OrderView; pending: boolean; overSla: boolean; canWrite: boolean;
   onApprove: () => void; onFulfil: () => void; onSendBack: () => void; onReject: () => void;
 }) {
   const [tab, setTab] = useState<"details" | "conversation">("details");
@@ -218,7 +219,7 @@ function OrderDetail({ order, pending, overSla, onApprove, onFulfil, onSendBack,
       </div>
 
       {/* Action bar: one row, primary on the right. */}
-      {(isOpen || order.status === "approved") && (
+      {canWrite && (isOpen || order.status === "approved") && (
         <div className="px-6 pb-4 flex items-center gap-2 flex-wrap">
           {isOpen && short.length > 0 && (
             <span className="text-[12px] text-warning bg-warning-bg border border-warning-bd rounded-md px-2.5 py-1 mr-auto">

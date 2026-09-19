@@ -6,7 +6,9 @@ import { revalidatePath } from "next/cache";
 import { cookies } from "next/headers";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { demo, newId, DEMO_ADMIN_ID, DEMO_ADMIN } from "@/lib/demo-store";
+import { demo, newId, DEMO_ADMIN_ID, DEMO_ADMIN, DEMO_ROLE_COOKIE } from "@/lib/demo-store";
+import { can, isStaff, type Capability } from "@/lib/permissions";
+import type { UserRole } from "@/types/database";
 import { inviteEmail, sendEmail } from "@/lib/email";
 import { inviteUrlFor } from "@/lib/invite";
 import { isDemo, DEMO_CUSTOMER_COOKIE } from "@/lib/data";
@@ -14,6 +16,28 @@ import type { OrderStatus } from "@/types/database";
 import type { SubmitOrderInput } from "@/lib/types";
 
 type Result<T = undefined> = { ok: true; data?: T } | { ok: false; error: string };
+
+// ---------------------------------------------------------------- authorization
+// Defence in depth. Row level security is the real boundary in live mode,
+// but demo mode has none, and an explicit check gives a better message.
+async function currentRole(): Promise<UserRole | null> {
+  const { getCurrentStaff } = await import("@/lib/data");
+  return (await getCurrentStaff())?.role ?? null;
+}
+
+async function denyUnless(capability: Capability): Promise<Result | null> {
+  if (can(await currentRole(), capability)) return null;
+  return { ok: false, error: "Your role does not permit this action." };
+}
+
+/** Demo only: switch which staff persona the console acts as. */
+export async function setDemoRole(role: UserRole): Promise<Result> {
+  if (!isDemo) return { ok: false, error: "Only available in demo mode." };
+  if (!isStaff(role)) return { ok: false, error: "Not a staff role." };
+  (await cookies()).set(DEMO_ROLE_COOKIE, role, { path: "/", httpOnly: true, sameSite: "lax" });
+  revalidateAll();
+  return { ok: true };
+}
 
 function revalidateAll() {
   for (const p of ["/admin", "/admin/inventory", "/admin/orders", "/admin/cms", "/admin/customers", "/portal", "/portal/orders", "/portal/checkout"]) revalidatePath(p);
@@ -38,6 +62,7 @@ function nextSku(category: string, existing: string[]): string {
 }
 
 export async function createProduct(input: NewProductInput): Promise<Result<{ sku: string }>> {
+  { const denied = await denyUnless("product:write"); if (denied) return denied; }
   if (!input.name.trim()) return { ok: false, error: "Product name is required." };
   if (!(input.price >= 0)) return { ok: false, error: "Price must be zero or more." };
   if (!Number.isInteger(input.stock_quantity) || input.stock_quantity < 0) return { ok: false, error: "Opening stock must be a whole number." };
@@ -62,6 +87,7 @@ export async function createProduct(input: NewProductInput): Promise<Result<{ sk
 export interface UpdateProductInput { price: number; stock_quantity: number; reorder_point: number; is_archived: boolean; name: string; description: string }
 
 export async function updateProduct(id: string, input: UpdateProductInput): Promise<Result> {
+  { const denied = await denyUnless("product:write"); if (denied) return denied; }
   if (!input.name.trim()) return { ok: false, error: "Product name is required." };
   if (!(input.price >= 0)) return { ok: false, error: "Price must be zero or more." };
   if (!Number.isInteger(input.stock_quantity) || input.stock_quantity < 0) return { ok: false, error: "Stock must be a whole number." };
@@ -80,6 +106,7 @@ export async function updateProduct(id: string, input: UpdateProductInput): Prom
 
 // ---------------------------------------------------------------- orders
 export async function setOrderStatus(orderId: string, status: OrderStatus): Promise<Result> {
+  { const denied = await denyUnless("order:write"); if (denied) return denied; }
   if (isDemo) {
     const o = demo.orders.find((o) => o.id === orderId);
     if (!o) return { ok: false, error: "Order not found." };
@@ -154,6 +181,7 @@ export async function submitOrder(input: SubmitOrderInput): Promise<Result<{ ord
 
 // ---------------------------------------------------------------- CMS
 export async function toggleAnnouncement(id: string, is_active: boolean): Promise<Result> {
+  { const denied = await denyUnless("cms:write"); if (denied) return denied; }
   if (isDemo) {
     const a = demo.announcements.find((a) => a.id === id);
     if (a) a.is_active = is_active;
@@ -207,6 +235,7 @@ async function deliverInvite(to: string, company: string, token: string): Promis
  * Email goes out in either mode when RESEND_API_KEY is configured.
  */
 export async function onboardCustomer(input: { company_name: string; email: string }): Promise<Result<InviteResult>> {
+  { const denied = await denyUnless("customer:write"); if (denied) return denied; }
   const email = input.email.trim().toLowerCase();
   const company = input.company_name.trim();
   if (!email.includes("@")) return { ok: false, error: "Enter a valid email." };
@@ -216,7 +245,7 @@ export async function onboardCustomer(input: { company_name: string; email: stri
 
   if (isDemo) {
     if (demo.customers.some((c) => c.email === email)) return { ok: false, error: "A customer with that email already exists." };
-    demo.customers.push({ id: newId(), email, role: "customer", company_name: company, invite_token: token, invited_at: now, activated_at: null, created_at: now });
+    demo.customers.push({ id: newId(), email, role: "customer", company_name: company, billing_address: null, ntn: null, strn: null, invite_token: token, invited_at: now, activated_at: null, created_at: now });
   } else {
     const admin = createAdminClient();
     const { data: created, error } = await admin.auth.admin.createUser({
@@ -301,13 +330,13 @@ export async function acceptInvite(token: string, password: string): Promise<Res
 }
 
 // ---------------------------------------------------------------- order conversation (send back / reply / resubmit)
-async function author(): Promise<{ id: string; role: "admin" | "customer" } | null> {
+async function author(): Promise<{ id: string; role: UserRole } | null> {
   const { getCurrentUser } = await import("@/lib/data");
   const u = await getCurrentUser();
   return u ? { id: u.id, role: u.role } : null;
 }
 
-async function addMessage(orderId: string, by: { id: string; role: "admin" | "customer" }, body: string): Promise<Result> {
+async function addMessage(orderId: string, by: { id: string; role: UserRole }, body: string): Promise<Result> {
   if (isDemo) {
     demo.messages.push({ id: newId(), order_id: orderId, author_id: by.id, author_role: by.role, body, created_at: new Date().toISOString() });
     return { ok: true };
@@ -323,8 +352,9 @@ async function addMessage(orderId: string, by: { id: string; role: "admin" | "cu
  */
 export async function sendBackOrder(orderId: string, comment: string, quantities: Record<string, number>): Promise<Result> {
   if (!comment.trim()) return { ok: false, error: "Add a comment so the customer knows what to change." };
+  const denied = await denyUnless("order:write"); if (denied) return denied;
   const by = isDemo ? { id: DEMO_ADMIN_ID, role: "admin" as const } : await author();
-  if (!by || by.role !== "admin") return { ok: false, error: "Admins only." };
+  if (!by) return { ok: false, error: "Sign in first." };
 
   const changes: string[] = [];
   if (isDemo) {
@@ -363,7 +393,7 @@ export async function sendBackOrder(orderId: string, comment: string, quantities
 export async function rejectOrder(orderId: string, reason: string): Promise<Result> {
   if (!reason.trim()) return { ok: false, error: "Give the customer a reason." };
   const by = isDemo ? { id: DEMO_ADMIN_ID, role: "admin" as const } : await author();
-  if (!by || by.role !== "admin") return { ok: false, error: "Admins only." };
+  if (!by || !isStaff(by.role)) return { ok: false, error: "Staff only." };
   const res = await setOrderStatus(orderId, "rejected");
   if (!res.ok) return res;
   await addMessage(orderId, by, "Order rejected: " + reason.trim());
@@ -385,7 +415,7 @@ export async function replyToOrder(orderId: string, body: string): Promise<Resul
 export async function adminReplyToOrder(orderId: string, body: string): Promise<Result> {
   if (!body.trim()) return { ok: false, error: "Message is empty." };
   const by = isDemo ? { id: DEMO_ADMIN_ID, role: "admin" as const } : await author();
-  if (!by || by.role !== "admin") return { ok: false, error: "Admins only." };
+  if (!by || !isStaff(by.role)) return { ok: false, error: "Staff only." };
   const res = await addMessage(orderId, by, body.trim());
   revalidateAll();
   return res;

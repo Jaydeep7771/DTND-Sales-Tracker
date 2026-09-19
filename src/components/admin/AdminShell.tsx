@@ -6,7 +6,9 @@ import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "rea
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { num } from "@/lib/format";
-import { signOut } from "@/lib/actions";
+import { setDemoRole, signOut } from "@/lib/actions";
+import { can, ROLE_LABEL, type Capability } from "@/lib/permissions";
+import type { UserRole } from "@/types/database";
 
 // 16px line icons (1.75 stroke) so each item stays recognisable when the rail is collapsed.
 const ICONS: Record<string, ReactNode> = {
@@ -15,6 +17,8 @@ const ICONS: Record<string, ReactNode> = {
   orders: <><path d="M9 4h6l1 3H8l1-3Z" /><rect x="5" y="7" width="14" height="14" rx="2" /><path d="M9 12h6M9 16h4" /></>,
   customers: <><circle cx="9" cy="8" r="3.5" /><path d="M2.5 20a6.5 6.5 0 0 1 13 0" /><circle cx="17" cy="9" r="2.5" /><path d="M16 15.5a5 5 0 0 1 5.5 4.5" /></>,
   cms: <><path d="M4 6h16M4 12h10M4 18h13" /><circle cx="18" cy="13" r="2" /></>,
+  ledger: <><path d="M4 5.5A1.5 1.5 0 0 1 5.5 4H18a2 2 0 0 1 2 2v13a1 1 0 0 1-1 1H6a2 2 0 0 1-2-2V5.5Z" /><path d="M4 17.5A1.5 1.5 0 0 1 5.5 16H20" /><path d="M8 8h8M8 11.5h5" /></>,
+  invoices: <><path d="M6 3h9l4 4v13.5a.5.5 0 0 1-.76.43L16 19.5l-2.5 1.5L11 19.5 8.5 21 6.26 19.93A.5.5 0 0 1 6 19.5V3Z" /><path d="M14 3v4h4" /><path d="M9 11h7M9 14.5h5" /></>,
 };
 function Icon({ name }: { name: string }) {
   return (
@@ -24,12 +28,15 @@ function Icon({ name }: { name: string }) {
   );
 }
 
-const NAV: [string, string, string][] = [
-  ["/admin", "Dashboard", "dashboard"],
-  ["/admin/inventory", "Inventory", "inventory"],
-  ["/admin/orders", "Orders", "orders"],
-  ["/admin/customers", "Customers", "customers"],
-  ["/admin/cms", "CMS Settings", "cms"],
+// Each item declares the capability required to see it, so navigation
+// follows the role automatically.
+const NAV: { href: string; label: string; icon: string; cap: Capability }[] = [
+  { href: "/admin",            label: "Dashboard",         icon: "dashboard", cap: "order:read" },
+  { href: "/admin/inventory",  label: "Inventory",         icon: "inventory", cap: "product:read" },
+  { href: "/admin/orders",     label: "Orders",            icon: "orders",    cap: "order:read" },
+  { href: "/admin/customers",  label: "Customers",         icon: "customers", cap: "customer:read" },
+  { href: "/admin/accounts",   label: "Chart of accounts", icon: "ledger",    cap: "ledger:read" },
+  { href: "/admin/cms",        label: "CMS Settings",      icon: "cms",       cap: "cms:write" },
 ];
 const COLLAPSE_KEY = "dtnd-admin-collapsed";
 
@@ -41,9 +48,10 @@ export interface AdminShellProps {
   admin: { name: string; title: string; initials: string };
   topOffset: number; // height of the demo screen bar above, so sticky headers stack
   demo: boolean;
+  role: UserRole;
 }
 
-export default function AdminShell({ children, pendingCount, totalSkus, lowStockCount, admin, topOffset, demo }: AdminShellProps) {
+export default function AdminShell({ children, pendingCount, totalSkus, lowStockCount, admin, topOffset, demo, role }: AdminShellProps) {
   const [collapsed, setCollapsed] = useState(false);
   const [drawer, setDrawer] = useState(false);
   const path = usePathname();
@@ -89,7 +97,7 @@ export default function AdminShell({ children, pendingCount, totalSkus, lowStock
       </div>
 
       <nav className="flex flex-col gap-[3px]" aria-label="Admin">
-        {NAV.map(([href, label, icon]) => {
+        {NAV.filter((n) => can(role, n.cap)).map(({ href, label, icon }) => {
           const on = href === "/admin" ? path === "/admin" : path.startsWith(href);
           const badge = href === "/admin/orders" && pendingCount > 0 ? pendingCount : null;
           const mini = collapsed && !drawer;
@@ -174,7 +182,17 @@ export default function AdminShell({ children, pendingCount, totalSkus, lowStock
                 <div className="text-[12.5px] font-semibold">{admin.name}</div>
                 <div className="text-[11px] text-slate">{admin.title}</div>
               </div>
-              {!demo && (
+              {demo ? (
+                <select
+                  value={role}
+                  aria-label="Demo role"
+                  onChange={(e) => setDemoRole(e.target.value as UserRole).then(() => router.refresh())}
+                  className="border border-border bg-surface rounded-md px-1.5 py-1 text-[11px] text-slate outline-none cursor-pointer"
+                >
+                  <option value="admin">{ROLE_LABEL.admin}</option>
+                  <option value="finance">{ROLE_LABEL.finance}</option>
+                </select>
+              ) : (
                 <button type="button" onClick={() => signOut().then(() => router.push("/login"))} className="text-[11.5px] text-slate bg-transparent border-0 cursor-pointer hover:text-danger">Sign out</button>
               )}
             </div>

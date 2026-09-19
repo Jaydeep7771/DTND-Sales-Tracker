@@ -7,7 +7,7 @@
 create extension if not exists "pgcrypto";
 
 -- ---------- Enums ----------------------------------------------------
-create type public.user_role         as enum ('admin', 'customer');
+create type public.user_role         as enum ('admin', 'finance', 'customer');
 create type public.order_status      as enum ('pending', 'changes_requested', 'approved', 'rejected', 'fulfilled', 'cancelled');
 create type public.announcement_type as enum ('announcement', 'faq');
 
@@ -18,6 +18,9 @@ create table public.users (
   email        text not null unique,
   role         public.user_role not null default 'customer',
   company_name text,
+  billing_address text,                        -- printed on invoices
+  ntn text,                                    -- National Tax Number
+  strn text,                                   -- Sales Tax Registration Number
   invite_token text unique,                    -- set on onboarding, cleared when the invite is accepted
   invited_at   timestamptz,
   activated_at timestamptz,
@@ -48,6 +51,12 @@ create trigger on_auth_user_created
 create or replace function public.is_admin()
 returns boolean language sql stable security definer set search_path = public as $$
   select exists (select 1 from public.users where id = auth.uid() and role = 'admin');
+$$;
+
+-- Staff = admin or finance. Finance reads operations data but cannot change it.
+create or replace function public.is_staff()
+returns boolean language sql stable security definer set search_path = public as $$
+  select exists (select 1 from public.users where id = auth.uid() and role in ('admin', 'finance'));
 $$;
 
 -- ---------- products -------------------------------------------------
@@ -142,7 +151,7 @@ alter table public.announcements enable row level security;
 alter table public.order_messages enable row level security;
 
 -- users: read own row; admins read/write all. Inserts come from the trigger.
-create policy "users: self read"   on public.users for select using (id = auth.uid() or public.is_admin());
+create policy "users: self read"   on public.users for select using (id = auth.uid() or public.is_staff());
 create policy "users: admin write" on public.users for all    using (public.is_admin()) with check (public.is_admin());
 
 -- products: any signed-in user sees non-archived; admins see and manage all.
@@ -152,20 +161,20 @@ create policy "products: admin write" on public.products for all
   using (public.is_admin()) with check (public.is_admin());
 
 -- orders: customers create/read their own; admins read/update all.
-create policy "orders: own read"     on public.orders for select using (customer_id = auth.uid() or public.is_admin());
+create policy "orders: own read"     on public.orders for select using (customer_id = auth.uid() or public.is_staff());
 create policy "orders: own insert"   on public.orders for insert with check (customer_id = auth.uid());
 create policy "orders: admin update" on public.orders for update using (public.is_admin()) with check (public.is_admin());
 
 -- order_items: follow the parent order. Customers may only add items to their own pending orders.
 create policy "order_items: read" on public.order_items for select
-  using (exists (select 1 from public.orders o where o.id = order_id and (o.customer_id = auth.uid() or public.is_admin())));
+  using (exists (select 1 from public.orders o where o.id = order_id and (o.customer_id = auth.uid() or public.is_staff())));
 create policy "order_items: own insert" on public.order_items for insert
   with check (exists (select 1 from public.orders o where o.id = order_id and o.customer_id = auth.uid() and o.status = 'pending'));
 
 -- order_messages: participants of the order only. Customers may post while the
 -- order is still open (pending / changes_requested); admins any time.
 create policy "order_messages: read" on public.order_messages for select
-  using (exists (select 1 from public.orders o where o.id = order_id and (o.customer_id = auth.uid() or public.is_admin())));
+  using (exists (select 1 from public.orders o where o.id = order_id and (o.customer_id = auth.uid() or public.is_staff())));
 create policy "order_messages: insert" on public.order_messages for insert
   with check (author_id = auth.uid() and (public.is_admin() or exists (
     select 1 from public.orders o where o.id = order_id and o.customer_id = auth.uid() and o.status in ('pending', 'changes_requested'))));

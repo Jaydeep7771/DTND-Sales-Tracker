@@ -1,12 +1,14 @@
 import { Card, PageHeading } from "@/components/ui";
 import OnboardCustomer from "@/components/admin/OnboardCustomer";
 import InviteStatus from "@/components/admin/InviteStatus";
-import { getCustomers, getOrders } from "@/lib/data";
+import { getCurrentStaff, getCustomers, getOrders } from "@/lib/data";
+import { can } from "@/lib/permissions";
 import { inviteUrlFor } from "@/lib/invite";
 import { money, shortDate } from "@/lib/format";
 
 export default async function CustomersPage() {
-  const [customers, orders] = await Promise.all([getCustomers(), getOrders()]);
+  const [staff, customers, orders] = await Promise.all([getCurrentStaff(), getCustomers(), getOrders()]);
+  const canWrite = can(staff?.role, "customer:write");
   const pendingInvites = customers.filter((c) => !c.activated_at).length;
 
   return (
@@ -14,7 +16,7 @@ export default async function CustomersPage() {
       <PageHeading
         title="Customers"
         sub={`${customers.length} portal accounts${pendingInvites ? ` · ${pendingInvites} invite${pendingInvites === 1 ? "" : "s"} pending` : ""}`}
-        actions={<OnboardCustomer />}
+        actions={canWrite ? <OnboardCustomer /> : undefined}
       />
       <Card className="overflow-hidden">
         <div className="overflow-x-auto">

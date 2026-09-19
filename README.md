@@ -49,6 +49,28 @@ when the dev server restarts.
 | `/design-system` | Palette, type, controls and layout rules |
 | `/login` | Email + password sign-in |
 
+## Roles
+
+| Role | Can do |
+| --- | --- |
+| admin | Everything, including finance. A single operator is never locked out. |
+| finance | Invoices, payments, ledger and reports. Reads orders, products and customers but cannot approve orders or change the catalog. |
+| customer | Portal only. |
+
+Permissions come from one capability map in `src/lib/permissions.ts`. Navigation, route guards and server actions all read from it, so adding an `operations` role later is a one-line change. Guarding happens at three layers: the navigation hides what you cannot use, the route redirects if you type the URL, and the server action refuses regardless. In live mode row level security is the real boundary.
+
+In demo mode a dropdown beside the avatar switches between the admin and finance personas.
+
+## Accounting
+
+Run `supabase/02-accounting.sql` after `schema.sql`. It adds a double-entry general ledger, invoicing and receivables.
+
+The ledger is the foundation: every financial document posts one balanced journal entry, and the trial balance, profit and loss, balance sheet, ledgers and aging are all queries over `journal_lines` rather than separately maintained totals. The database enforces the rules rather than the UI. Debits must equal credits, posted entries are append-only so corrections are reversing entries, issued invoices are immutable, and closing a period blocks posting into it. Invoice numbering uses a locked counter rather than a sequence, because sequences leak numbers on rollback and tax authorities require an unbroken run.
+
+The posting rules are listed on the Chart of accounts screen for your accountant to review. Accounts are found by `system_key`, not by code, so the chart can be renumbered to match an existing one without breaking any posting rule.
+
+Invoice PDFs go to a private bucket, unlike product images. An invoice exposes pricing and tax identity, so downloads are served through a signed URL to the owner or to staff.
+
 ## Email
 
 Invite emails are sent through [Resend](https://resend.com) whenever `RESEND_API_KEY` is set, in demo mode too. Set `EMAIL_FROM` to a verified sender (e.g. `Dynamic Traders <orders@yourdomain.com>`) and `NEXT_PUBLIC_APP_URL` to the public site URL so links resolve. Without a key, the admin still gets the link and a preview of the exact message in the portal. The template lives in `src/lib/email.ts` (HTML + plain text).
