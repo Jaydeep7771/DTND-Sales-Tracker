@@ -10,6 +10,7 @@ import {
   createDraftInvoice, discardDraftInvoice, issueAndSendInvoice,
   sendInvoice, updateDraftInvoice, voidInvoice,
 } from "@/lib/invoice-actions";
+import RecordReceiptModal from "./RecordReceiptModal";
 import { computeInvoiceTotals, SETTLEMENT_LABEL, type Settlement } from "@/lib/accounting";
 import { money, num, shortDate, shortDateTime } from "@/lib/format";
 import type { BadgeTone } from "@/components/ui";
@@ -19,7 +20,7 @@ const TONE: Record<Settlement, BadgeTone> = {
   draft: "warning", open: "info", part_paid: "info", paid: "success", overdue: "danger", void: "danger",
 };
 
-export default function InvoicePanel({ order, canInvoice }: { order: OrderView; canInvoice: boolean }) {
+export default function InvoicePanel({ order, canInvoice, canRecordPayment }: { order: OrderView; canInvoice: boolean; canRecordPayment: boolean }) {
   const router = useRouter();
   const toast = useToast();
   const [busy, start] = useTransition();
@@ -59,7 +60,7 @@ export default function InvoicePanel({ order, canInvoice }: { order: OrderView; 
       {issued.length > 0 && (
         <div className="flex flex-col gap-3">
           <div className="label">Issued documents</div>
-          {issued.map((inv) => <IssuedInvoice key={inv.id} invoice={inv} canInvoice={canInvoice} />)}
+          {issued.map((inv) => <IssuedInvoice key={inv.id} invoice={inv} canInvoice={canInvoice} canRecordPayment={canRecordPayment} />)}
         </div>
       )}
     </div>
@@ -213,11 +214,13 @@ function DraftEditor({ invoice, canInvoice }: { invoice: InvoiceView; canInvoice
 }
 
 // ---------------------------------------------------------------- issued
-function IssuedInvoice({ invoice, canInvoice }: { invoice: InvoiceView; canInvoice: boolean }) {
+function IssuedInvoice({ invoice, canInvoice, canRecordPayment }: { invoice: InvoiceView; canInvoice: boolean; canRecordPayment: boolean }) {
   const router = useRouter();
   const toast = useToast();
   const [busy, start] = useTransition();
   const [voiding, setVoiding] = useState(false);
+  const [paying, setPaying] = useState(false);
+  const unpaid = invoice.status === "issued" && invoice.balance > 0.005;
   const [reason, setReason] = useState("");
 
   function resend() {
@@ -251,6 +254,9 @@ function IssuedInvoice({ invoice, canInvoice }: { invoice: InvoiceView; canInvoi
         <a href={`/api/invoices/${invoice.id}/pdf`} target="_blank" rel="noreferrer">
           <Button variant="secondary" size="sm">Download PDF</Button>
         </a>
+        {canRecordPayment && unpaid && (
+          <Button size="sm" onClick={() => setPaying(true)}>Record payment</Button>
+        )}
         {canInvoice && invoice.status === "issued" && (
           <>
             <Button variant="secondary" size="sm" onClick={resend} disabled={busy}>{busy ? "Sending…" : "Email again"}</Button>
@@ -258,6 +264,16 @@ function IssuedInvoice({ invoice, canInvoice }: { invoice: InvoiceView; canInvoi
           </>
         )}
       </div>
+
+      {paying && (
+        <RecordReceiptModal
+          customerId={invoice.customer.id}
+          customerName={invoice.customer.company_name}
+          openInvoices={[invoice]}
+          focusInvoiceId={invoice.id}
+          onClose={() => setPaying(false)}
+        />
+      )}
 
       {voiding && (
         <Modal

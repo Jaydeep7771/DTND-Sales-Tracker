@@ -282,7 +282,8 @@ function buildInvoice(
   customer: { id: string; company_name: string | null; email: string },
   orderNumber: string | null,
 ): InvoiceView {
-  const paid = payments.reduce((a, p) => a + Number(p.amount), 0);
+  const live = payments.filter((p) => !p.reversed_at);
+  const paid = live.reduce((a, p) => a + Number(p.amount), 0);
   const lines: InvoiceLineView[] = items
     .sort((a, b) => a.sort_order - b.sort_order)
     .map((i) => ({
@@ -482,4 +483,55 @@ export async function getCustomerDetail(id: string): Promise<CustomerDetail | nu
       lastOrderAt: orders[0]?.created_at ?? null,
     },
   };
+}
+
+// ---------------------------------------------------------------- receipts
+export interface ReceiptView {
+  entry_id: string;
+  received_on: string;
+  method: string;
+  reference: string | null;
+  note: string | null;
+  amount: number;
+  reversed: boolean;
+  reversal_reason: string | null;
+  allocations: { invoice_id: string; invoice_number: string | null; amount: number }[];
+}
+
+/**
+ * Allocations grouped back into the receipts they came from. They share a
+ * journal entry, so that is the grouping key.
+ */
+export async function getReceipts(customerId: string): Promise<ReceiptView[]> {
+  const invoices = await getInvoices({ customerId });
+  const numberOf = new Map(invoices.map((i) => [i.id, i.invoice_number]));
+  const ids = new Set(invoices.map((i) => i.id));
+
+  const rows = isDemo
+    ? demo.acc.payments.filter((p) => ids.has(p.invoice_id))
+    : ((await (await createClient()).from("invoice_payments").select("*").in("invoice_id", [...ids])).data ?? []);
+
+  const groups = new Map<string, ReceiptView>();
+  for (const p of rows) {
+    const key = p.journal_entry_id ?? p.id;
+    const existing = groups.get(key);
+    const allocation = { invoice_id: p.invoice_id, invoice_number: numberOf.get(p.invoice_id) ?? null, amount: Number(p.amount) };
+    if (existing) {
+      existing.amount += allocation.amount;
+      existing.allocations.push(allocation);
+    } else {
+      groups.set(key, {
+        entry_id: key,
+        received_on: p.paid_on,
+        method: p.method,
+        reference: p.reference,
+        note: p.note,
+        amount: allocation.amount,
+        reversed: !!p.reversed_at,
+        reversal_reason: p.reversal_reason,
+        allocations: [allocation],
+      });
+    }
+  }
+  return [...groups.values()].sort((a, b) => b.received_on.localeCompare(a.received_on));
 }

@@ -297,9 +297,15 @@ create table public.invoice_payments (
   note        text,
   journal_entry_id uuid references public.journal_entries (id),
   recorded_by uuid references public.users (id),
+  -- A bounced cheque is reversed, never deleted, so the trail survives.
+  reversed_at     timestamptz,
+  reversal_reason text,
+  reversed_by     uuid references public.users (id),
   created_at  timestamptz not null default now()
 );
 create index invoice_payments_invoice_idx on public.invoice_payments (invoice_id);
+-- Allocations of one receipt share a journal entry, which is how they group.
+create index invoice_payments_entry_idx on public.invoice_payments (journal_entry_id);
 
 -- Once issued, only the void fields and the PDF pointer may change.
 create or replace function public.lock_issued_invoice()
@@ -362,7 +368,7 @@ select i.id, i.invoice_number, i.customer_id, i.issue_date, i.due_date, i.total,
             when i.due_date < current_date                 then 'overdue'
             else 'open' end                  as settlement
   from public.invoices i
-  left join public.invoice_payments p on p.invoice_id = i.id
+  left join public.invoice_payments p on p.invoice_id = i.id and p.reversed_at is null
  where i.status = 'issued' and i.type <> 'proforma'
  group by i.id;
 

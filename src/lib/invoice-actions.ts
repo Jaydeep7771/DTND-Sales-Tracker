@@ -8,12 +8,13 @@
 import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
 import { demo, newId } from "@/lib/demo-store";
-import { isDemo, getCompanySettings, getCurrentStaff, getInvoice, getOrders, getRemainingToInvoice } from "@/lib/data";
+import { isDemo, getCompanySettings, getCurrentStaff, getInvoice, getInvoices, getOrders, getRemainingToInvoice } from "@/lib/data";
 import { can } from "@/lib/permissions";
-import { addDays, businessDate, computeInvoiceTotals, round2 } from "@/lib/accounting";
+import { addDays, businessDate, computeInvoiceTotals, round2, type PaymentMethod } from "@/lib/accounting";
 import { fiscalYearLabel, nextDocumentNumber, postEntry, reverseEntry } from "@/lib/ledger";
 import { invoiceEmail, sendEmail } from "@/lib/email";
-import type { Invoice, InvoiceItem } from "@/types/database";
+import { money } from "@/lib/format";
+import type { InvoiceItem } from "@/types/database";
 import type { InvoiceView } from "@/lib/types";
 
 type Result<T = undefined> = { ok: true; data?: T } | { ok: false; error: string };
@@ -327,51 +328,133 @@ export async function voidInvoice(invoiceId: string, reason: string): Promise<Re
   return { ok: true };
 }
 
-// ---------------------------------------------------------------- payments
-export async function recordPayment(
-  invoiceId: string,
-  input: { amount: number; paid_on: string; method: Invoice["currency"] extends never ? never : string; reference: string },
-): Promise<Result> {
+// ---------------------------------------------------------------- receipts
+/**
+ * Cash arrives as a receipt from a customer, not as a payment on one
+ * invoice. A Net 30 buyer settles several invoices with one transfer, so
+ * the receipt is the unit of work and allocation across invoices is part
+ * of it. All allocations of a receipt share one journal entry, which is
+ * what groups them and what a reversal acts on.
+ */
+export interface ReceiptInput {
+  customerId: string;
+  amount: number;
+  received_on: string;
+  method: PaymentMethod;
+  reference: string;
+  note: string;
+  allocations: { invoice_id: string; amount: number }[];
+}
+
+const REFERENCE_REQUIRED: PaymentMethod[] = ["bank_transfer", "cheque", "online"];
+
+export async function recordReceipt(input: ReceiptInput): Promise<Result<{ entryNo: string; allocated: number }>> {
   const denied = await deny("payment:write"); if (denied) return denied;
-  const invoice = await getInvoice(invoiceId);
-  if (!invoice) return { ok: false, error: "Invoice not found." };
-  if (invoice.status !== "issued") return { ok: false, error: "Only issued invoices can take payment." };
-  if (!(input.amount > 0)) return { ok: false, error: "Enter an amount greater than zero." };
-  if (input.amount > invoice.balance + 0.005) {
-    return { ok: false, error: `That is more than the outstanding balance of ${invoice.balance}.` };
+
+  const amount = round2(input.amount);
+  if (!(amount > 0)) return { ok: false, error: "Enter an amount greater than zero." };
+  if (input.received_on > businessDate()) return { ok: false, error: "A receipt cannot be dated in the future." };
+  if (REFERENCE_REQUIRED.includes(input.method) && !input.reference.trim()) {
+    return { ok: false, error: "A reference is required so the receipt can be reconciled against the bank." };
   }
 
-  const bankKey = input.method === "cash" ? "cash" : "bank";
+  // Only this customer's live invoices may be settled.
+  const open = (await getInvoices({ customerId: input.customerId }))
+    .filter((i) => i.status === "issued" && i.balance > 0.005);
+  const byId = new Map(open.map((i) => [i.id, i]));
+
+  const allocations = input.allocations
+    .map((a) => ({ ...a, amount: round2(a.amount) }))
+    .filter((a) => a.amount > 0);
+  if (allocations.length === 0) return { ok: false, error: "Allocate the receipt to at least one invoice." };
+
+  for (const a of allocations) {
+    const inv = byId.get(a.invoice_id);
+    if (!inv) return { ok: false, error: "One of the invoices is not open for this customer." };
+    if (a.amount > inv.balance + 0.005) {
+      return { ok: false, error: `${inv.invoice_number} only has ${money(inv.balance)} outstanding.` };
+    }
+  }
+
+  const allocated = round2(allocations.reduce((s, a) => s + a.amount, 0));
+  if (Math.abs(allocated - amount) > 0.005) {
+    return allocated > amount
+      ? { ok: false, error: `Allocated ${money(allocated)} but the receipt is ${money(amount)}.` }
+      : { ok: false, error: `${money(round2(amount - allocated))} is still unallocated. Customer advances are not supported yet, so allocate the full amount or reduce it.` };
+  }
+
+  // One entry for the whole receipt: Dr bank or cash, Cr receivables.
+  const customer = open[0]?.customer;
   const posted = await postEntry({
-    entry_date: input.paid_on,
-    narration: `Payment received for ${invoice.invoice_number} from ${invoice.customer.company_name}`,
+    entry_date: input.received_on,
+    narration: `Receipt from ${customer?.company_name ?? "customer"}${input.reference.trim() ? ` · ${input.reference.trim()}` : ""}`,
     source_type: "payment",
-    source_id: invoiceId,
+    source_id: input.customerId,
     lines: [
-      { system_key: bankKey, debit: input.amount, memo: input.reference || undefined },
-      { system_key: "accounts_receivable", credit: input.amount, party_id: invoice.customer.id, memo: invoice.invoice_number ?? undefined },
+      { system_key: input.method === "cash" ? "cash" : "bank", debit: amount, memo: input.reference.trim() || undefined },
+      { system_key: "accounts_receivable", credit: amount, party_id: input.customerId, memo: allocations.map((a) => byId.get(a.invoice_id)?.invoice_number).filter(Boolean).join(", ") },
     ],
   });
   if (!posted.ok) return { ok: false, error: `Ledger posting failed: ${posted.error}` };
 
   const staff = await getCurrentStaff();
+  const rows = allocations.map((a) => ({
+    invoice_id: a.invoice_id,
+    amount: a.amount,
+    paid_on: input.received_on,
+    method: input.method,
+    reference: input.reference.trim() || null,
+    note: input.note.trim() || null,
+    journal_entry_id: posted.entryId,
+    recorded_by: staff?.id ?? null,
+  }));
+
   if (isDemo) {
-    demo.acc.payments.push({
-      id: newId(), invoice_id: invoiceId, amount: input.amount, paid_on: input.paid_on,
-      method: input.method as never, reference: input.reference || null, note: null,
-      journal_entry_id: posted.entryId, recorded_by: staff?.id ?? null, created_at: new Date().toISOString(),
-    });
+    for (const r of rows) {
+      demo.acc.payments.push({
+        id: newId(), ...r,
+        reversed_at: null, reversal_reason: null, reversed_by: null,
+        created_at: new Date().toISOString(),
+      });
+    }
   } else {
-    const { error } = await (await createClient()).from("invoice_payments").insert({
-      invoice_id: invoiceId, amount: input.amount, paid_on: input.paid_on,
-      method: input.method as never, reference: input.reference || null,
-      journal_entry_id: posted.entryId, recorded_by: staff?.id ?? null,
-    });
+    const { error } = await (await createClient()).from("invoice_payments").insert(rows);
+    if (error) return { ok: false, error: error.message };
+  }
+  revalidateAll();
+  return { ok: true, data: { entryNo: posted.entryNo, allocated } };
+}
+
+/**
+ * Reverses a whole receipt, which is what a bounced cheque needs. The
+ * allocations stay on record marked reversed, and the ledger gains a
+ * mirror entry rather than losing the original.
+ */
+export async function reverseReceipt(journalEntryId: string, reason: string): Promise<Result> {
+  const denied = await deny("payment:write"); if (denied) return denied;
+  if (!reason.trim()) return { ok: false, error: "Give a reason, for example a returned cheque." };
+
+  const reversed = await reverseEntry(journalEntryId, reason.trim());
+  if (!reversed.ok) return { ok: false, error: `Could not reverse the ledger entry: ${reversed.error}` };
+
+  const patch = { reversed_at: new Date().toISOString(), reversal_reason: reason.trim() };
+  if (isDemo) {
+    for (const p of demo.acc.payments.filter((p) => p.journal_entry_id === journalEntryId && !p.reversed_at)) {
+      Object.assign(p, patch);
+    }
+  } else {
+    const staff = await getCurrentStaff();
+    const { error } = await (await createClient())
+      .from("invoice_payments")
+      .update({ ...patch, reversed_by: staff?.id ?? null })
+      .eq("journal_entry_id", journalEntryId)
+      .is("reversed_at", null);
     if (error) return { ok: false, error: error.message };
   }
   revalidateAll();
   return { ok: true };
 }
+
 
 /** Re-renders the PDF from the frozen snapshot. Used by the download route. */
 export async function invoicePdfBytes(invoiceId: string): Promise<Buffer | null> {

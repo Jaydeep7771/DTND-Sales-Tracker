@@ -3,7 +3,8 @@ import { notFound } from "next/navigation";
 import { Badge, Button, Card, OrderBadge } from "@/components/ui";
 import BillingDetailsCard from "@/components/admin/BillingDetailsCard";
 import InviteStatus from "@/components/admin/InviteStatus";
-import { getCurrentStaff, getCustomerDetail } from "@/lib/data";
+import ReceiptsCard from "@/components/admin/ReceiptsCard";
+import { getCurrentStaff, getCustomerDetail, getReceipts } from "@/lib/data";
 import { inviteUrlFor } from "@/lib/invite";
 import { can } from "@/lib/permissions";
 import { SETTLEMENT_LABEL, type Settlement } from "@/lib/accounting";
@@ -16,12 +17,14 @@ const SETTLEMENT_TONE: Record<Settlement, BadgeTone> = {
 
 export default async function CustomerDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const [detail, staff] = await Promise.all([getCustomerDetail(id), getCurrentStaff()]);
+  const [detail, staff, receipts] = await Promise.all([getCustomerDetail(id), getCurrentStaff(), getReceipts(id)]);
   if (!detail) notFound();
 
   const { customer, orders, invoices, ledger, stats } = detail;
   const canBill = can(staff?.role, "customer:billing");
   const canSeeLedger = can(staff?.role, "ledger:read");
+  const canRecordPayment = can(staff?.role, "payment:write");
+  const openInvoices = invoices.filter((i) => i.status === "issued" && i.balance > 0.005);
   const name = customer.company_name ?? customer.email;
 
   const tiles = [
@@ -107,6 +110,14 @@ export default async function CustomerDetailPage({ params }: { params: Promise<{
               </div>
             )}
           </Card>
+
+          <ReceiptsCard
+            customerId={customer.id}
+            customerName={name}
+            receipts={receipts}
+            openInvoices={openInvoices}
+            canRecord={canRecordPayment}
+          />
 
           {/* Orders */}
           <Card className="overflow-hidden">

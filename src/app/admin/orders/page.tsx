@@ -10,6 +10,7 @@ export default async function AdminOrdersPage({ searchParams }: { searchParams: 
       initialId={order}
       canWrite={can(staff?.role, "order:write")}
       canInvoice={can(staff?.role, "invoice:write")}
+      canRecordPayment={can(staff?.role, "payment:write")}
     />
   );
 }

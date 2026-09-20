@@ -82,6 +82,18 @@ The PDF is rendered from the frozen snapshot rather than from live order data, s
 
 Dates on financial documents use the business calendar, set to Asia/Karachi. A server running in UTC would otherwise date an invoice raised at 01:00 in Karachi to the previous day, which is not acceptable on a tax document.
 
+## Receipts and payments
+
+Cash is recorded as a **receipt from a customer**, not as a payment on one invoice, because a Net 30 buyer usually settles several invoices with one transfer. A receipt captures the amount, date, method and reference, then allocates across that customer's open invoices. Allocation defaults to oldest first and shows what is still unallocated as you type. Submitting is blocked until the allocation matches the amount exactly.
+
+One receipt posts **one journal entry**, debiting bank or cash and crediting receivables. The allocations share that entry, which is what groups them and what a reversal acts on.
+
+A reference is mandatory for bank transfers, cheques and online payments, because that is what makes the credit findable when reconciling a statement. Cash and adjustments do not need one.
+
+**Bounced cheques are reversed, never deleted.** Reversing a receipt posts a mirror journal entry, marks the allocations reversed, and returns the invoices to outstanding. The customer ledger then reads invoice, invoice, receipt, reversal, with a correct running balance at every step.
+
+Two limits worth knowing. Overpayment is refused rather than held as a customer advance, and withholding tax deducted at source by a customer is not modelled yet. Both need a decision from you before they are built.
+
 ## Email
 
 Invite emails are sent through [Resend](https://resend.com) whenever `RESEND_API_KEY` is set, in demo mode too. Set `EMAIL_FROM` to a verified sender (e.g. `Dynamic Traders <orders@yourdomain.com>`) and `NEXT_PUBLIC_APP_URL` to the public site URL so links resolve. Without a key, the admin still gets the link and a preview of the exact message in the portal. The template lives in `src/lib/email.ts` (HTML + plain text).

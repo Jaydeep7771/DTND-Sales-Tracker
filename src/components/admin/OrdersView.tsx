@@ -23,7 +23,7 @@ type Filter = "open" | OrderStatus | "all";
 const FILTERS: [Filter, string][] = [["open", "Needs action"], ["pending", "Pending"], ["changes_requested", "Sent back"], ["approved", "Approved"], ["fulfilled", "Fulfilled"], ["all", "All"]];
 const SLA_HOURS = 4;
 
-export default function OrdersView({ orders, initialId, canWrite, canInvoice }: { orders: OrderView[]; initialId?: string; canWrite: boolean; canInvoice: boolean }) {
+export default function OrdersView({ orders, initialId, canWrite, canInvoice, canRecordPayment }: { orders: OrderView[]; initialId?: string; canWrite: boolean; canInvoice: boolean; canRecordPayment: boolean }) {
   const router = useRouter();
   const params = useSearchParams();
   const toast = useToast();
@@ -168,6 +168,7 @@ export default function OrdersView({ orders, initialId, canWrite, canInvoice }: 
             onReject={() => setModal("reject")}
             canWrite={canWrite}
             canInvoice={canInvoice}
+            canRecordPayment={canRecordPayment}
           />
         ) : (
           <Card className="p-12 text-center">
@@ -184,8 +185,8 @@ export default function OrdersView({ orders, initialId, canWrite, canInvoice }: 
 }
 
 /** Right-hand panel: header with total + actions, then Details / Conversation tabs. */
-function OrderDetail({ order, pending, overSla, onApprove, onFulfil, onSendBack, onReject, canWrite, canInvoice }: {
-  order: OrderView; pending: boolean; overSla: boolean; canWrite: boolean; canInvoice: boolean;
+function OrderDetail({ order, pending, overSla, onApprove, onFulfil, onSendBack, onReject, canWrite, canInvoice, canRecordPayment }: {
+  order: OrderView; pending: boolean; overSla: boolean; canWrite: boolean; canInvoice: boolean; canRecordPayment: boolean;
   onApprove: () => void; onFulfil: () => void; onSendBack: () => void; onReject: () => void;
 }) {
   const [tab, setTab] = useState<"details" | "invoice" | "conversation">("details");
@@ -262,7 +263,7 @@ function OrderDetail({ order, pending, overSla, onApprove, onFulfil, onSendBack,
 
       {tab === "invoice" ? (
         <div className="px-6 py-5">
-          <InvoicePanel order={order} canInvoice={canInvoice} />
+          <InvoicePanel order={order} canInvoice={canInvoice} canRecordPayment={canRecordPayment} />
         </div>
       ) : tab === "details" ? (
         <>

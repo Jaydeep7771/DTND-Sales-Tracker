@@ -58,7 +58,7 @@ type InvoicesRow = {
   created_by: string | null; created_at: string; updated_at: string;
 };
 type InvoiceItemsRow = { id: string; invoice_id: string; order_item_id: string | null; sku: string; name: string; unit_of_measure: string; quantity: number; unit_price: number; line_total: number; sort_order: number };
-type InvoicePaymentsRow = { id: string; invoice_id: string; amount: number; paid_on: string; method: PaymentMethodDb; reference: string | null; note: string | null; journal_entry_id: string | null; recorded_by: string | null; created_at: string };
+type InvoicePaymentsRow = { id: string; invoice_id: string; amount: number; paid_on: string; method: PaymentMethodDb; reference: string | null; note: string | null; journal_entry_id: string | null; recorded_by: string | null; reversed_at: string | null; reversal_reason: string | null; reversed_by: string | null; created_at: string };
 type CompanySettingsRow = {
   id: boolean; legal_name: string; address: string; city: string; country: string;
   phone: string | null; email: string | null; ntn: string | null; strn: string | null; bank_details: string | null;
@@ -83,7 +83,7 @@ export interface Database {
       journal_lines:      { Row: JournalLinesRow;    Insert: Optional<JournalLinesRow, "id" | "debit" | "credit" | "party_id" | "memo" | "sort_order">; Update: Partial<JournalLinesRow>; Relationships: [] };
       invoices:           { Row: InvoicesRow;        Insert: Optional<InvoicesRow, "id" | "invoice_number" | "type" | "status" | "order_id" | "seller" | "buyer" | "currency" | "subtotal" | "discount" | "freight" | "tax_amount" | "total" | "issue_date" | "due_date" | "terms_days" | "notes" | "pdf_path" | "pdf_sha256" | "journal_entry_id" | "credit_note_for" | "issued_by" | "issued_at" | "voided_at" | "void_reason" | "created_by" | "created_at" | "updated_at">; Update: Partial<InvoicesRow>; Relationships: [] };
       invoice_items:      { Row: InvoiceItemsRow;    Insert: Optional<InvoiceItemsRow, "id" | "order_item_id" | "unit_of_measure" | "sort_order">; Update: Partial<InvoiceItemsRow>; Relationships: [] };
-      invoice_payments:   { Row: InvoicePaymentsRow; Insert: Optional<InvoicePaymentsRow, "id" | "paid_on" | "method" | "reference" | "note" | "journal_entry_id" | "recorded_by" | "created_at">; Update: Partial<InvoicePaymentsRow>; Relationships: [] };
+      invoice_payments:   { Row: InvoicePaymentsRow; Insert: Optional<InvoicePaymentsRow, "id" | "paid_on" | "method" | "reference" | "note" | "journal_entry_id" | "recorded_by" | "reversed_at" | "reversal_reason" | "reversed_by" | "created_at">; Update: Partial<InvoicePaymentsRow>; Relationships: [] };
       company_settings:   { Row: CompanySettingsRow; Insert: Partial<CompanySettingsRow>; Update: Partial<CompanySettingsRow>; Relationships: [] };
       accounting_periods: { Row: PeriodsRow;         Insert: Optional<PeriodsRow, "id" | "closed_at" | "closed_by" | "created_at">; Update: Partial<PeriodsRow>; Relationships: [] };
       order_messages: { Row: OrderMessagesRow; Insert: Optional<OrderMessagesRow, "id" | "created_at">; Update: Partial<OrderMessagesRow>; Relationships: [] };

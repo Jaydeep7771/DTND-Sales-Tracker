@@ -171,3 +171,19 @@ export function addDays(isoDate: string, days: number): string {
   d.setUTCDate(d.getUTCDate() + days);
   return d.toISOString().slice(0, 10);
 }
+
+/** Oldest invoice first, which is the standard way to apply a lump sum. */
+export function allocateOldestFirst(
+  invoices: { id: string; balance: number; due_date: string | null }[],
+  amount: number,
+): Record<string, number> {
+  let left = round2(amount);
+  const out: Record<string, number> = {};
+  const ordered = [...invoices].sort((a, b) => (a.due_date ?? "").localeCompare(b.due_date ?? ""));
+  for (const inv of ordered) {
+    if (left <= 0.005) break;
+    const take = round2(Math.min(left, inv.balance));
+    if (take > 0) { out[inv.id] = take; left = round2(left - take); }
+  }
+  return out;
+}
