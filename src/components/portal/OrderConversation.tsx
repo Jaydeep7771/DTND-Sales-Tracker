@@ -9,6 +9,7 @@ import OrderThread from "@/components/OrderThread";
 import { replyToOrder, resubmitOrder, withdrawOrder } from "@/lib/actions";
 import { money, num } from "@/lib/format";
 import type { OrderView } from "@/lib/types";
+import { taxConfig, taxLabel } from "@/lib/money";
 
 export default function OrderConversation({ order }: { order: OrderView }) {
   const router = useRouter();
@@ -80,7 +81,7 @@ export default function OrderConversation({ order }: { order: OrderView }) {
           </div>
           <div className="flex justify-end gap-6 text-[13px]">
             <span className="text-slate">Subtotal <span className="font-mono text-ink ml-2">{money(subtotal)}</span></span>
-            <span className="text-slate">Total incl. 5% tax <span className="font-mono text-ink font-semibold ml-2">{money(Math.round(subtotal * 1.05))}</span></span>
+            <span className="text-slate">Total incl. {taxLabel()} <span className="font-mono text-ink font-semibold ml-2">{money(Math.round(subtotal * (1 + taxConfig().rate)))}</span></span>
           </div>
 
           {sentBack && (

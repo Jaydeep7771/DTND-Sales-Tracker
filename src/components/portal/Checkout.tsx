@@ -8,6 +8,7 @@ import { Button, Card, Field, Input, Select, Textarea } from "@/components/ui";
 import { useCart } from "./CartProvider";
 import { submitOrder } from "@/lib/actions";
 import { money, num } from "@/lib/format";
+import { taxLabel } from "@/lib/money";
 
 const ADDRESSES = ["Warehouse 3 — SITE Area, Karachi", "Head office — Clifton, Karachi"];
 
@@ -78,7 +79,7 @@ export default function Checkout() {
         <div className="flex flex-col gap-[9px]">
           {[
             [`Subtotal (${cart.lines.length} lines · ${num(cart.lines.reduce((a, l) => a + l.quantity, 0))} units)`, money(cart.subtotal)],
-            ["Sales tax 5%", money(cart.tax)],
+            [taxLabel(), money(cart.tax)],
             ["Freight", "Quoted at approval"],
           ].map(([k, v]) => (
             <div key={k} className="flex justify-between text-[13px] text-slate-strong"><span>{k}</span><span className="font-mono text-ink">{v}</span></div>

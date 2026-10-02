@@ -14,10 +14,29 @@ import { addDays, businessDate, computeInvoiceTotals, round2, type PaymentMethod
 import { fiscalYearLabel, nextDocumentNumber, postEntry, reverseEntry } from "@/lib/ledger";
 import { invoiceEmail, sendEmail } from "@/lib/email";
 import { money } from "@/lib/format";
-import type { InvoiceItem } from "@/types/database";
+import type { CompanySettings, InvoiceItem } from "@/types/database";
 import type { InvoiceView } from "@/lib/types";
 
 type Result<T = undefined> = { ok: true; data?: T } | { ok: false; error: string };
+
+/**
+ * The seller side of the frozen snapshot. Presentation is included on
+ * purpose: an invoice should keep the letterhead, currency notation and
+ * tax wording it was issued with, however settings change afterwards.
+ */
+function sellerSnapshot(settings: CompanySettings) {
+  return {
+    name: settings.legal_name, address: settings.address, city: settings.city, country: settings.country,
+    ntn: settings.ntn, strn: settings.strn, phone: settings.phone, email: settings.email, bank: settings.bank_details,
+    tagline: settings.tagline, initials: settings.logo_initials,
+    template: settings.invoice_template, accent: settings.accent_color,
+    footer_note: settings.invoice_footer_note, tax_label: settings.tax_label,
+    show_bank: settings.invoice_show_bank, show_signature: settings.invoice_show_signature,
+    show_tax_ids: settings.invoice_show_tax_ids,
+    currency_symbol: settings.currency_symbol, currency_display: settings.currency_display,
+    decimals: settings.decimal_places, locale: settings.number_locale,
+  };
+}
 
 function revalidateAll() {
   for (const p of ["/admin", "/admin/orders", "/admin/invoices", "/admin/accounts", "/portal/orders", "/portal/invoices"]) revalidatePath(p);
@@ -64,9 +83,9 @@ export async function createDraftInvoice(orderId: string): Promise<Result<{ id: 
     demo.acc.invoices.unshift({
       id, invoice_number: null, type: "tax_invoice", status: "draft",
       order_id: orderId, customer_id: order.customer.id,
-      seller: {}, buyer: {}, currency: "PKR", tax_rate: taxRate,
+      seller: {}, buyer: {}, currency: settings.currency_code, tax_rate: taxRate,
       subtotal: totals.subtotal, discount: 0, freight: 0, tax_amount: totals.tax_amount, total: totals.total,
-      issue_date: null, due_date: null, terms_days: settings.default_terms_days, notes: null,
+      issue_date: null, due_date: null, terms_days: settings.default_terms_days, notes: settings.invoice_default_notes,
       pdf_path: null, pdf_sha256: null, journal_entry_id: null, credit_note_for: null,
       issued_by: null, issued_at: null, voided_at: null, void_reason: null,
       created_by: null, created_at: now, updated_at: now,
@@ -86,7 +105,8 @@ export async function createDraftInvoice(orderId: string): Promise<Result<{ id: 
   const supabase = await createClient();
   const { data: inv, error } = await supabase.from("invoices").insert({
     order_id: orderId, customer_id: order.customer.id, tax_rate: taxRate,
-    terms_days: settings.default_terms_days,
+    currency: settings.currency_code, terms_days: settings.default_terms_days,
+    notes: settings.invoice_default_notes,
     subtotal: totals.subtotal, tax_amount: totals.tax_amount, total: totals.total,
   }).select("id").single();
   if (error || !inv) return { ok: false, error: error?.message ?? "Could not create the draft." };
@@ -200,10 +220,7 @@ export async function issueInvoice(invoiceId: string): Promise<Result<{ invoice_
   const buyerRow = isDemo
     ? demo.customers.find((c) => c.id === customer.id)
     : (await (await createClient()).from("users").select("*").eq("id", customer.id).single()).data;
-  const seller = {
-    name: settings.legal_name, address: settings.address, city: settings.city, country: settings.country,
-    ntn: settings.ntn, strn: settings.strn, phone: settings.phone, email: settings.email, bank: settings.bank_details,
-  };
+  const seller = sellerSnapshot(settings);
   const buyer = {
     name: customer.company_name, email: customer.email,
     address: buyerRow?.billing_address ?? null, ntn: buyerRow?.ntn ?? null, strn: buyerRow?.strn ?? null,
@@ -460,6 +477,11 @@ export async function reverseReceipt(journalEntryId: string, reason: string): Pr
 export async function invoicePdfBytes(invoiceId: string): Promise<Buffer | null> {
   const invoice = await getInvoice(invoiceId);
   if (!invoice) return null;
+  // A draft has no snapshot yet, so preview it against current settings:
+  // that is what it will look like once issued.
+  if (invoice.status === "draft") {
+    invoice.seller = sellerSnapshot(await getCompanySettings());
+  }
   const { renderInvoicePdf } = await import("@/lib/invoice-pdf");
   return renderInvoicePdf(invoice as InvoiceView);
 }

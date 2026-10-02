@@ -12,6 +12,7 @@ import { useToast } from "@/components/ui/Toast";
 import { useCart } from "./CartProvider";
 import { loadCatalogPage } from "@/lib/actions";
 import { money, num, stockState } from "@/lib/format";
+import { currencyPrefix } from "@/lib/money";
 import type { CategoryCount, Product, ProductPage } from "@/lib/types";
 
 type Sort = "ordered" | "price" | "newest";
@@ -76,7 +77,7 @@ export default function Catalog({ initial, categories }: { initial: ProductPage;
         </div>
       </div>
       <div>
-        <div className="label mb-[9px]">Unit price (PKR)</div>
+        <div className="label mb-[9px]">Unit price ({currencyPrefix()})</div>
         <div className="flex gap-2">
           <input value={min} onChange={(e) => setMin(e.target.value)} placeholder="Min" inputMode="numeric" aria-label="Minimum price" className="flex-1 min-w-0 border border-border rounded-[7px] px-2.5 py-2 text-[12.5px] font-mono outline-none bg-surface-soft focus:border-accent focus:bg-surface" />
           <input value={max} onChange={(e) => setMax(e.target.value)} placeholder="Max" inputMode="numeric" aria-label="Maximum price" className="flex-1 min-w-0 border border-border rounded-[7px] px-2.5 py-2 text-[12.5px] font-mono outline-none bg-surface-soft focus:border-accent focus:bg-surface" />

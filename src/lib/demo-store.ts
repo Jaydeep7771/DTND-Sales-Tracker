@@ -137,7 +137,7 @@ function seed(): DemoState {
 }
 
 // Bump when DemoState changes shape so HMR-preserved state is reseeded.
-const DEMO_VERSION = 3;
+const DEMO_VERSION = 4; // settings gained currency and invoice presentation fields
 const g = globalThis as unknown as { __dtndDemo?: DemoState; __dtndDemoVersion?: number };
 if (!g.__dtndDemo || g.__dtndDemoVersion !== DEMO_VERSION) {
   g.__dtndDemo = seed();

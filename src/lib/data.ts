@@ -1,10 +1,11 @@
 // Server-side read layer. Uses Supabase when keys are configured, otherwise
 // the in-memory demo store so the app runs with zero setup.
 import "server-only";
+import { cache } from "react";
 import { cookies } from "next/headers";
 import { createClient } from "@/lib/supabase/server";
 import { demo, DEMO_CUSTOMER_EMAIL } from "@/lib/demo-store";
-import { TAX_RATE } from "@/lib/types";
+import { configureCurrency, configureTax, currencyFromSettings, taxConfig } from "@/lib/money";
 import { isStaff } from "@/lib/permissions";
 import { DEMO_ROLE_COOKIE } from "@/lib/demo-store";
 import type { AccountBalance } from "@/lib/accounting";
@@ -43,7 +44,7 @@ function buildOrder(
     messages,
     invoices: [],
     subtotal,
-    total: Math.round(subtotal * (1 + TAX_RATE)),
+    total: Math.round(subtotal * (1 + taxConfig().rate)),
   };
 }
 
@@ -56,6 +57,7 @@ function paginate(all: Product[], q: ProductQuery, catalogTotal: number): Produc
 
 // ---------------------------------------------------------------- products
 export async function getProducts(q: ProductQuery = {}): Promise<ProductPage> {
+  await applyFormatting();
   const term = (q.q ?? "").trim().toLowerCase();
   const cat = q.category && q.category !== "All" ? q.category : null;
 
@@ -82,6 +84,7 @@ export async function getProducts(q: ProductQuery = {}): Promise<ProductPage> {
 }
 
 export async function getCategories(): Promise<CategoryCount[]> {
+  await applyFormatting();
   const products = isDemo ? demo.products.filter((p) => !p.is_archived) : (await (await createClient()).from("products").select("category").eq("is_archived", false)).data ?? [];
   const counts = new Map<string, number>();
   for (const p of products) counts.set(p.category, (counts.get(p.category) ?? 0) + 1);
@@ -89,6 +92,7 @@ export async function getCategories(): Promise<CategoryCount[]> {
 }
 
 export async function getLowStock(limit = 5): Promise<Product[]> {
+  await applyFormatting();
   if (isDemo) return demo.products.filter((p) => !p.is_archived && p.stock_quantity < p.reorder_point).sort((a, b) => a.stock_quantity - b.stock_quantity).slice(0, limit);
   const supabase = await createClient();
   // PostgREST can't compare two columns directly; fetch and filter (catalog is small for a POC).
@@ -98,6 +102,7 @@ export async function getLowStock(limit = 5): Promise<Product[]> {
 
 // ---------------------------------------------------------------- orders
 export async function getOrders(opts: { customerId?: string } = {}): Promise<OrderView[]> {
+  await applyFormatting();
   if (isDemo) {
     const cid = opts.customerId;
     const built = demo.orders
@@ -151,6 +156,7 @@ export async function getOrder(id: string): Promise<OrderView | null> {
 
 // ---------------------------------------------------------------- customers / users
 export async function getCustomers(): Promise<UserProfile[]> {
+  await applyFormatting();
   if (isDemo) return demo.customers;
   const { data } = await (await createClient()).from("users").select("*").eq("role", "customer").order("company_name");
   return data ?? [];
@@ -172,6 +178,7 @@ export async function getCurrentUser(): Promise<UserProfile | null> {
 
 // ---------------------------------------------------------------- announcements
 export async function getAnnouncements(opts: { type?: "announcement" | "faq"; activeOnly?: boolean } = {}): Promise<Announcement[]> {
+  await applyFormatting();
   const filter = (a: Announcement) => (!opts.type || a.type === opts.type) && (!opts.activeOnly || (a.is_active && (!a.expires_at || a.expires_at > new Date().toISOString())));
   if (isDemo) return demo.announcements.filter(filter).sort((a, b) => a.priority - b.priority);
   let query = (await createClient()).from("announcements").select("*").order("priority");
@@ -183,6 +190,7 @@ export async function getAnnouncements(opts: { type?: "announcement" | "faq"; ac
 
 // ---------------------------------------------------------------- dashboard
 export async function getDashboardMetrics(): Promise<DashboardMetrics> {
+  await applyFormatting();
   const [orders, products, cats] = await Promise.all([getOrders(), getProducts({ perPage: 10000 }), getCategories()]);
   const now = Date.now();
   const startOfToday = new Date(); startOfToday.setHours(0, 0, 0, 0);
@@ -223,7 +231,24 @@ export async function getCompanySettings(): Promise<CompanySettings> {
   return data as CompanySettings;
 }
 
+/**
+ * Applies the company's currency and tax settings to the formatters.
+ *
+ * This lives in the read layer rather than in a layout component because
+ * Next renders a layout and its page segments in parallel: a component
+ * cannot guarantee it runs before the page that formats money. Every read
+ * below awaits this first, so by the time a screen has data to render the
+ * formatters are already configured. Cached per request, so it costs one
+ * query however many reads a page makes.
+ */
+const applyFormatting = cache(async () => {
+  const s = await getCompanySettings();
+  configureCurrency(currencyFromSettings(s));
+  configureTax({ rate: s.default_tax_rate, label: s.tax_label });
+});
+
 export async function getAccounts(): Promise<AccountRow[]> {
+  await applyFormatting();
   const rows = isDemo ? demo.acc.accounts : ((await (await createClient()).from("accounts").select("*")).data ?? []);
   return [...rows].sort((a, b) => a.code.localeCompare(b.code));
 }
@@ -233,6 +258,7 @@ export async function getAccounts(): Promise<AccountRow[]> {
  * totals, so it cannot drift away from the ledger.
  */
 export async function getTrialBalance(): Promise<AccountBalance[]> {
+  await applyFormatting();
   const accounts = await getAccounts();
   const totals = new Map<string, { debit: number; credit: number }>();
 
@@ -267,6 +293,7 @@ export async function getTrialBalance(): Promise<AccountBalance[]> {
 }
 
 export async function getJournal(limit = 100): Promise<JournalEntryRow[]> {
+  await applyFormatting();
   if (isDemo) return demo.acc.entries.slice(0, limit);
   const { data } = await (await createClient())
     .from("journal_entries").select("*").order("entry_date", { ascending: false }).limit(limit);
@@ -329,6 +356,7 @@ function buildInvoice(
 }
 
 export async function getInvoices(opts: { customerId?: string; orderId?: string } = {}): Promise<InvoiceView[]> {
+  await applyFormatting();
   if (isDemo) {
     return demo.acc.invoices
       .filter((i) => (!opts.customerId || i.customer_id === opts.customerId) && (!opts.orderId || i.order_id === opts.orderId))
@@ -367,6 +395,7 @@ export async function getInvoices(opts: { customerId?: string; orderId?: string 
 }
 
 export async function getInvoice(id: string): Promise<InvoiceView | null> {
+  await applyFormatting();
   return (await getInvoices()).find((i) => i.id === id) ?? null;
 }
 
@@ -411,6 +440,7 @@ export interface CustomerDetail {
 }
 
 export async function getCustomerById(id: string): Promise<UserProfile | null> {
+  await applyFormatting();
   if (isDemo) return demo.customers.find((c) => c.id === id) ?? null;
   const { data } = await (await createClient()).from("users").select("*").eq("id", id).maybeSingle();
   return data ?? null;
@@ -418,6 +448,7 @@ export async function getCustomerById(id: string): Promise<UserProfile | null> {
 
 /** The customer's receivable subledger, oldest first with a running balance. */
 export async function getCustomerLedger(customerId: string): Promise<LedgerRow[]> {
+  await applyFormatting();
   const accounts = await getAccounts();
   const nameOf = new Map(accounts.map((a) => [a.id, `${a.code} ${a.name}`]));
 
@@ -459,6 +490,7 @@ export async function getCustomerLedger(customerId: string): Promise<LedgerRow[]
 }
 
 export async function getCustomerDetail(id: string): Promise<CustomerDetail | null> {
+  await applyFormatting();
   const customer = await getCustomerById(id);
   if (!customer) return null;
 
@@ -503,6 +535,7 @@ export interface ReceiptView {
  * journal entry, so that is the grouping key.
  */
 export async function getReceipts(customerId: string): Promise<ReceiptView[]> {
+  await applyFormatting();
   const invoices = await getInvoices({ customerId });
   const numberOf = new Map(invoices.map((i) => [i.id, i.invoice_number]));
   const ids = new Set(invoices.map((i) => i.id));

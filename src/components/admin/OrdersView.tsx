@@ -10,6 +10,7 @@ import OrderThread from "@/components/OrderThread";
 import InvoicePanel from "@/components/admin/InvoicePanel";
 import { adminReplyToOrder, rejectOrder, sendBackOrder, setOrderStatus } from "@/lib/actions";
 import { hoursSince, money, num, relativeTime, shortDateTime, shortDate } from "@/lib/format";
+import { currencyPrefix, taxLabel } from "@/lib/money";
 import type { OrderView, OrderStatus } from "@/lib/types";
 
 const TONE: Record<OrderStatus, string> = { pending: "#E6A23C", changes_requested: "#2F7DD1", approved: "#2F7DD1", fulfilled: "#0E7A46", rejected: "#B42318", cancelled: "#94A3B8" };
@@ -218,7 +219,7 @@ function OrderDetail({ order, pending, overSla, onApprove, onFulfil, onSendBack,
         <div className="text-right shrink-0">
           <div className="label">Order total</div>
           <div className="font-mono text-[26px] font-semibold tracking-[-.02em] leading-none mt-1">{money(order.total)}</div>
-          <div className="text-[11px] text-muted mt-1">incl. 5% tax · {order.items.length} line{order.items.length === 1 ? "" : "s"}</div>
+          <div className="text-[11px] text-muted mt-1">incl. {taxLabel()} · {order.items.length} line{order.items.length === 1 ? "" : "s"}</div>
         </div>
       </div>
 
@@ -297,7 +298,7 @@ function OrderDetail({ order, pending, overSla, onApprove, onFulfil, onSendBack,
                   <td className="px-6 py-2.5 text-right font-mono text-[13px] whitespace-nowrap">{money(order.subtotal)}</td>
                 </tr>
                 <tr>
-                  <td colSpan={3} className="px-6 pb-4 text-right text-[12.5px] text-slate">Sales tax 5%</td>
+                  <td colSpan={3} className="px-6 pb-4 text-right text-[12.5px] text-slate">{taxLabel()}</td>
                   <td className="px-6 pb-4 text-right font-mono text-[13px] whitespace-nowrap">{money(order.total - order.subtotal)}</td>
                 </tr>
               </tbody>
@@ -308,7 +309,7 @@ function OrderDetail({ order, pending, overSla, onApprove, onFulfil, onSendBack,
             {[
               ["Deliver to", order.delivery_address ?? "—"],
               ["Required by", order.required_by ? shortDate(order.required_by) : "—"],
-              ["Terms", "Net 30 · PKR"],
+              ["Terms", `Net 30 · ${currencyPrefix()}`],
               ["Customer note", order.note ?? "—"],
             ].map(([k, v]) => (
               <div key={k} className="min-w-0">

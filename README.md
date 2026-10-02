@@ -44,6 +44,7 @@ when the dev server restarts.
 | `/admin/customers` | Customer list with invite status and the live invite link (copy / open / resend email / new link), and **Onboard customer** which creates the account, generates the single-use link and emails it |
 | `/invite/[token]` | Customer opens the invite link, sets a password, and lands in the catalog |
 | `/admin/cms` | Announcements and FAQs with publish toggles |
+| `/admin/settings` | Company identity, currency, tax rate, invoice numbering and invoice design, with a live preview |
 | `/portal` | Catalog with filter rail, 9-per-page "Load more", add to cart |
 | `/portal/checkout` | Review order, delivery details, submit (status `pending`) |
 | `/portal/orders` | Active-order timeline, order history, and the conversation: a sent-back order shows the admin's comment and proposed quantities, which the customer can accept and resubmit, reply to, or withdraw |
@@ -93,6 +94,18 @@ A reference is mandatory for bank transfers, cheques and online payments, becaus
 **Bounced cheques are reversed, never deleted.** Reversing a receipt posts a mirror journal entry, marks the allocations reversed, and returns the invoices to outstanding. The customer ledger then reads invoice, invoice, receipt, reversal, with a correct running balance at every step.
 
 Two limits worth knowing. Overpayment is refused rather than held as a customer advance, and withholding tax deducted at source by a customer is not modelled yet. Both need a decision from you before they are built.
+
+## Settings
+
+`/admin/settings` holds the company record: identity, currency, tax, invoice numbering and invoice design. Admin and finance can reach it; the capability is `settings:finance`. Run `supabase/03-settings.sql` after the accounting schema.
+
+**The tax rate is one setting.** It was previously a hardcoded 5% on the cart and order screens while invoices used the 18% company setting, so the same order showed two different tax figures depending on where you looked. The catalogue, the cart, checkout, the order screens and invoices now all read the stored rate, and the wording follows it too: call it GST or VAT and every screen says so. Changing the rate affects new orders and new invoices; anything already issued keeps the rate it was raised at.
+
+**Currency** covers the code, the symbol, whether amounts print as `PKR 1,000` or `Rs 1,000`, the decimal places, and digit grouping — international `1,234,567` or lakh and crore `12,34,567`. The configuration is applied in the read layer rather than by a component, because Next renders a layout and its page segments in parallel, so a component cannot guarantee it runs before the page that formats money.
+
+One limit worth knowing: the PDF embeds a subset of IBM Plex that covers Latin-1 and the euro. A symbol outside it, such as ₨ or د.إ, cannot be drawn, so invoices fall back to the ISO code. The settings screen says so when you pick one.
+
+**Invoice design** offers three templates — classic, modern and compact — plus an accent colour, a footer line, and toggles for the payment block, the tax identifiers and a signature line. The choice is copied into the invoice snapshot at issue, alongside the seller and buyer details, so switching the template changes the next invoice and never the ones already sent. The preview beside the form redraws as you type, so the look can be judged without issuing a document to find out.
 
 ## Email
 

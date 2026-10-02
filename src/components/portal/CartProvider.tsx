@@ -3,7 +3,7 @@
 // Cart lives in localStorage so it survives reloads; submit sends it to the server.
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import type { CartLine } from "@/lib/types";
-import { TAX_RATE } from "@/lib/types";
+
 
 interface CartCtx {
   lines: CartLine[];
@@ -21,7 +21,12 @@ interface CartCtx {
 const Ctx = createContext<CartCtx | null>(null);
 const KEY = "dtnd-cart";
 
-export function CartProvider({ children }: { children: ReactNode }) {
+/**
+ * taxRate is passed in rather than read from the shared config, because
+ * the provider computes totals during its own render — before any child,
+ * including the component that applies company settings, has run.
+ */
+export function CartProvider({ children, taxRate }: { children: ReactNode; taxRate: number }) {
   const [lines, setLines] = useState<CartLine[]>([]);
   const [open, setOpen] = useState(false);
   const [hydrated, setHydrated] = useState(false);
@@ -52,9 +57,9 @@ export function CartProvider({ children }: { children: ReactNode }) {
 
   const value = useMemo(() => {
     const subtotal = lines.reduce((a, l) => a + l.unit_price * l.quantity, 0);
-    const tax = Math.round(subtotal * TAX_RATE);
+    const tax = Math.round(subtotal * taxRate);
     return { lines, open, setOpen, add, setQty, remove, clear, subtotal, tax, total: subtotal + tax };
-  }, [lines, open, add, setQty, remove, clear]);
+  }, [lines, open, add, setQty, remove, clear, taxRate]);
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }

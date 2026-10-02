@@ -7,6 +7,7 @@ import { Button, Field, Input, Modal } from "@/components/ui";
 import { useToast } from "@/components/ui/Toast";
 import { updateProduct } from "@/lib/actions";
 import type { Product } from "@/lib/types";
+import { currencyPrefix } from "@/lib/money";
 
 export default function EditProductModal({ product, onClose }: { product: Product; onClose: () => void }) {
   const router = useRouter();
@@ -58,7 +59,7 @@ export default function EditProductModal({ product, onClose }: { product: Produc
         {error && <p role="alert" className="col-span-full rounded-lg bg-danger-bg border border-danger-bd px-3 py-2 text-[13px] text-danger">{error}</p>}
         <Field label="Product name" className="col-span-full"><Input required value={form.name} onChange={set("name")} /></Field>
         <Field label="Description" className="col-span-full"><Input value={form.description} onChange={set("description")} placeholder="Optional" /></Field>
-        <Field label="Unit price (PKR)"><Input mono required type="number" min="0" step="0.01" value={form.price} onChange={set("price")} /></Field>
+        <Field label={`Unit price (${currencyPrefix()})`}><Input mono required type="number" min="0" step="0.01" value={form.price} onChange={set("price")} /></Field>
         <Field label="On hand"><Input mono required type="number" min="0" step="1" value={form.stock_quantity} onChange={set("stock_quantity")} /></Field>
         <Field label="Reorder point"><Input mono type="number" min="0" step="1" value={form.reorder_point} onChange={set("reorder_point")} /></Field>
         <label className="flex items-center gap-2.5 text-[13px] text-slate-dark self-end pb-2.5">

@@ -40,8 +40,8 @@ export function OrderBadge({ status }: { status: OrderStatus }) {
 }
 
 // ---------------------------------------------------------------- Card
-export function Card({ children, className = "", style }: { children: ReactNode; className?: string; style?: CSSProperties }) {
-  return <div className={`bg-surface border border-border rounded-[10px] ${className}`} style={style}>{children}</div>;
+export function Card({ children, className = "", style, id }: { children: ReactNode; className?: string; style?: CSSProperties; id?: string }) {
+  return <div id={id} className={`bg-surface border border-border rounded-[10px] ${className}`} style={style}>{children}</div>;
 }
 export function CardHeader({ title, sub, action }: { title: ReactNode; sub?: ReactNode; action?: ReactNode }) {
   return (

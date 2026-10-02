@@ -1,9 +1,11 @@
 import { redirect } from "next/navigation";
 import ScreenSwitcher from "@/components/ScreenSwitcher";
+import FormatBootstrap from "@/components/FormatBootstrap";
 import { CartProvider } from "@/components/portal/CartProvider";
 import PortalHeader from "@/components/portal/PortalHeader";
 import Banner from "@/components/portal/Banner";
-import { getAnnouncements, getCurrentUser, getOrders, isDemo } from "@/lib/data";
+import { getAnnouncements, getCompanySettings, getCurrentUser, getOrders, isDemo } from "@/lib/data";
+import { currencyFromSettings } from "@/lib/money";
 
 export const dynamic = "force-dynamic";
 
@@ -11,9 +13,10 @@ export default async function PortalLayout({ children }: { children: React.React
   const user = await getCurrentUser();
   if (!isDemo && !user) redirect("/login");
 
-  const [banners, orders] = await Promise.all([
+  const [banners, orders, settings] = await Promise.all([
     getAnnouncements({ type: "announcement", activeOnly: true }),
     user ? getOrders({ customerId: user.id }) : Promise.resolve([]),
+    getCompanySettings(),
   ]);
   const banner = banners[0];
   const topOffset = isDemo ? 37 : 0;
@@ -22,13 +25,20 @@ export default async function PortalLayout({ children }: { children: React.React
   const actionNeeded = orders.filter((o) => o.status === "changes_requested").length;
 
   return (
-    <CartProvider>
+    <>
+      {/* Currency and tax wording first, so every child formats correctly. */}
+      <FormatBootstrap
+        currency={currencyFromSettings(settings)}
+        tax={{ rate: settings.default_tax_rate, label: settings.tax_label }}
+      />
+      <CartProvider taxRate={settings.default_tax_rate}>
       {isDemo && <ScreenSwitcher />}
       <div className="flex-1 flex flex-col bg-canvas-portal">
         <PortalHeader company={company} account={account} topOffset={topOffset} demo={isDemo} actionNeeded={actionNeeded} />
         {banner && <Banner announcement={banner} />}
         <main className="max-w-[1280px] w-full mx-auto px-4 sm:px-5 pt-4 sm:pt-[22px] pb-12">{children}</main>
       </div>
-    </CartProvider>
+      </CartProvider>
+    </>
   );
 }

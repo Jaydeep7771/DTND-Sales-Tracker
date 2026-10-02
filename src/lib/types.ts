@@ -28,7 +28,7 @@ export interface OrderView {
   messages: OrderMessage[];
   invoices: InvoiceView[];
   subtotal: number;
-  total: number; // subtotal + 5% sales tax
+  total: number; // subtotal + tax at the configured rate
 }
 
 export interface ProductQuery {
@@ -79,7 +79,7 @@ export interface SubmitOrderInput {
   note: string;
 }
 
-export const TAX_RATE = 0.05;
+// The tax rate is a company setting, not a constant. See src/lib/money.ts.
 
 // ---------------------------------------------------------------- invoices
 export interface InvoiceLineView {

@@ -13,6 +13,7 @@ import { useToast } from "@/components/ui/Toast";
 import { createProduct } from "@/lib/actions";
 import { compressImage, formatBytes, IMAGE_ACCEPTED_TYPES } from "@/lib/image";
 import { createClient } from "@/lib/supabase/client";
+import { currencyPrefix } from "@/lib/money";
 
 const BUCKET = "product-images";
 const UOMS = ["Each", "Box of 50", "Box of 100", "Carton", "Pallet"];
@@ -114,7 +115,7 @@ export default function AddProductModal({ categories, demo, onClose }: { categor
             {UOMS.map((u) => <option key={u}>{u}</option>)}
           </Select>
         </Field>
-        <Field label="Unit price (PKR)">
+        <Field label={`Unit price (${currencyPrefix()})`}>
           <Input mono required type="number" min="0" step="0.01" placeholder="0.00" value={form.price} onChange={set("price")} />
         </Field>
         <Field label="Opening stock">

@@ -64,7 +64,18 @@ type CompanySettingsRow = {
   phone: string | null; email: string | null; ntn: string | null; strn: string | null; bank_details: string | null;
   default_tax_rate: number; default_terms_days: number; invoice_prefix: string; credit_note_prefix: string;
   fiscal_year_start_month: number; updated_at: string;
+  // identity
+  tagline: string; logo_initials: string;
+  // currency and number formatting
+  currency_code: string; currency_symbol: string; currency_display: "code" | "symbol";
+  decimal_places: number; number_locale: string;
+  // wording and invoice presentation
+  tax_label: string;
+  invoice_template: InvoiceTemplateDb; accent_color: string;
+  invoice_footer_note: string | null; invoice_default_notes: string | null;
+  invoice_show_bank: boolean; invoice_show_signature: boolean; invoice_show_tax_ids: boolean;
 };
+export type InvoiceTemplateDb = "classic" | "modern" | "compact";
 type PeriodsRow = { id: string; name: string; starts_on: string; ends_on: string; closed_at: string | null; closed_by: string | null; created_at: string };
 
 type AccountTypeDb = "asset" | "liability" | "equity" | "income" | "expense";

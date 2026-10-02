@@ -2,7 +2,9 @@ import { redirect } from "next/navigation";
 import AdminShell from "@/components/admin/AdminShell";
 import OrderNotifications from "@/components/admin/OrderNotifications";
 import ScreenSwitcher from "@/components/ScreenSwitcher";
-import { getCurrentStaff, getDashboardMetrics, isDemo } from "@/lib/data";
+import FormatBootstrap from "@/components/FormatBootstrap";
+import { getCompanySettings, getCurrentStaff, getDashboardMetrics, isDemo } from "@/lib/data";
+import { currencyFromSettings } from "@/lib/money";
 import { ROLE_LABEL } from "@/lib/permissions";
 
 export const dynamic = "force-dynamic";
@@ -22,11 +24,16 @@ export default async function AdminLayout({ children }: { children: React.ReactN
 
   const role = staff?.role ?? "admin";
   const name = staff?.company_name ?? staff?.email ?? "Operations";
-  const m = await getDashboardMetrics();
+  const [m, settings] = await Promise.all([getDashboardMetrics(), getCompanySettings()]);
   const topOffset = isDemo ? 37 : 0;
 
   return (
     <>
+      {/* Currency and tax settings first, so every child formats correctly. */}
+      <FormatBootstrap
+        currency={currencyFromSettings(settings)}
+        tax={{ rate: settings.default_tax_rate, label: settings.tax_label }}
+      />
       {isDemo && <ScreenSwitcher />}
       {!isDemo && <OrderNotifications />}
       <AdminShell

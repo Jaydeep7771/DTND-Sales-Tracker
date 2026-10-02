@@ -91,6 +91,21 @@ export function seedAccounting(uuid: (seed: string) => string): DemoAccounting {
     credit_note_prefix: "CN",
     fiscal_year_start_month: 7,
     updated_at: now,
+    tagline: "Wholesale distribution",
+    logo_initials: "DT",
+    currency_code: "PKR",
+    currency_symbol: "Rs",
+    currency_display: "code",
+    decimal_places: 0,
+    number_locale: "en-US",
+    tax_label: "Sales Tax",
+    invoice_template: "classic",
+    accent_color: "#123A5E",
+    invoice_footer_note: null,
+    invoice_default_notes: null,
+    invoice_show_bank: true,
+    invoice_show_signature: false,
+    invoice_show_tax_ids: true,
   };
 
   return { accounts, entries: [], lines: [], invoices: [], invoiceItems: [], payments: [], settings, counters: {}, nextEntryNo: 1 };

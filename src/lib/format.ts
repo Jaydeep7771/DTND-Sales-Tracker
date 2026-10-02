@@ -1,12 +1,7 @@
 /** Formatting helpers shared by admin and portal. */
 
-export function money(n: number): string {
-  return "PKR " + Math.round(n).toLocaleString("en-US");
-}
-
-export function num(n: number): string {
-  return n.toLocaleString("en-US");
-}
+// Currency formatting follows company settings; see src/lib/money.ts.
+export { money, num, amount, currencyPrefix } from "@/lib/money";
 
 /** "18 Sep, 09:12" */
 export function shortDateTime(iso: string): string {

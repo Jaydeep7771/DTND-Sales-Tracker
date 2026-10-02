@@ -15,6 +15,7 @@ import { computeInvoiceTotals, SETTLEMENT_LABEL, type Settlement } from "@/lib/a
 import { money, num, shortDate, shortDateTime } from "@/lib/format";
 import type { BadgeTone } from "@/components/ui";
 import type { InvoiceView, OrderView } from "@/lib/types";
+import { taxConfig, taxLabel } from "@/lib/money";
 
 const TONE: Record<Settlement, BadgeTone> = {
   draft: "warning", open: "info", part_paid: "info", paid: "success", overdue: "danger", void: "danger",
@@ -189,7 +190,7 @@ function DraftEditor({ invoice, canInvoice }: { invoice: InvoiceView; canInvoice
             ["Subtotal", money(totals.subtotal)],
             ...(discount ? [["Discount", `-${money(discount)}`]] : []),
             ...(freight ? [["Freight", money(freight)]] : []),
-            [`Sales tax ${(invoice.tax_rate * 100).toFixed(0)}%`, money(totals.tax_amount)],
+            [taxLabel({ ...taxConfig(), rate: invoice.tax_rate }), money(totals.tax_amount)],
           ].map(([k, v]) => (
             <div key={k} className="flex justify-between text-slate"><span>{k}</span><span className="font-mono text-ink">{v}</span></div>
           ))}
