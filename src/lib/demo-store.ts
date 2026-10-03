@@ -120,7 +120,11 @@ function seed(): DemoState {
     required_by: new Date(Date.now() + 7 * 86400e3).toISOString().slice(0, 10),
     note: null,
     created_at: created,
-    items: lines.map(([sku, qty, price], i) => ({ id: uuid(`o${n}l${i}`), product_id: bySku(sku).id, quantity: qty, price_at_purchase: price })),
+    // Price comes from the catalogue, not from the fixture tuple. The old
+    // hardcoded prices bore no relation to the product's own price, so once
+    // cost existed a line could cost more than it sold for and gross margin
+    // came out at several hundred percent negative.
+    items: lines.map(([sku, qty], i) => ({ id: uuid(`o${n}l${i}`), product_id: bySku(sku).id, quantity: qty, price_at_purchase: bySku(sku).price })),
   });
 
   // The prototype's SKUs don't all exist in the generated catalog; map to real ones.
@@ -330,7 +334,7 @@ function seed(): DemoState {
 }
 
 // Bump when DemoState changes shape so HMR-preserved state is reseeded.
-const DEMO_VERSION = 10; // accounting periods added to demo state
+const DEMO_VERSION = 11; // accounting periods added to demo state
 const g = globalThis as unknown as { __dtndDemo?: DemoState; __dtndDemoVersion?: number };
 if (!g.__dtndDemo || g.__dtndDemoVersion !== DEMO_VERSION) {
   g.__dtndDemo = seed();

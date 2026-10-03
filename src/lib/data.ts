@@ -271,20 +271,34 @@ export async function getAccounts(): Promise<AccountRow[]> {
  * Trial balance. Computed from journal lines only, never from stored
  * totals, so it cannot drift away from the ledger.
  */
-export async function getTrialBalance(): Promise<AccountBalance[]> {
+export async function getTrialBalance(range?: { from?: string; to?: string }): Promise<AccountBalance[]> {
   await applyFormatting();
   const accounts = await getAccounts();
   const totals = new Map<string, { debit: number; credit: number }>();
 
+  // A statement is always "for a period" or "as at a date", so the same
+  // aggregation takes an optional range. Entries are filtered by their
+  // entry date, not the date they were keyed in.
   if (isDemo) {
+    const inRange = new Set(
+      demo.acc.entries
+        .filter((e) => (!range?.from || e.entry_date >= range.from) && (!range?.to || e.entry_date <= range.to))
+        .map((e) => e.id),
+    );
     for (const l of demo.acc.lines) {
+      if (!inRange.has(l.entry_id)) continue;
       const t = totals.get(l.account_id) ?? { debit: 0, credit: 0 };
       t.debit += Number(l.debit);
       t.credit += Number(l.credit);
       totals.set(l.account_id, t);
     }
   } else {
-    const { data } = await (await createClient()).from("journal_lines").select("account_id, debit, credit");
+    let q = (await createClient())
+      .from("journal_lines")
+      .select("account_id, debit, credit, journal_entries!inner(entry_date)");
+    if (range?.from) q = q.gte("journal_entries.entry_date", range.from);
+    if (range?.to) q = q.lte("journal_entries.entry_date", range.to);
+    const { data } = await q;
     for (const l of data ?? []) {
       const t = totals.get(l.account_id) ?? { debit: 0, credit: 0 };
       t.debit += Number(l.debit);
