@@ -45,6 +45,10 @@ when the dev server restarts.
 | `/invite/[token]` | Customer opens the invite link, sets a password, and lands in the catalog |
 | `/admin/cms` | Announcements and FAQs with publish toggles |
 | `/admin/settings` | Company identity, currency, tax rate, invoice numbering and invoice design, with a live preview |
+| `/admin/receivables` | Aged debtors in 30/60/90 buckets, worst debt first |
+| `/admin/purchases` | Supplier bills, suppliers and the sales tax working |
+| `/admin/reports` | Profit and loss, balance sheet |
+| `/admin/periods` | Period close |
 | `/portal` | Catalog with filter rail, 9-per-page "Load more", add to cart |
 | `/portal/checkout` | Review order, delivery details, submit (status `pending`) |
 | `/portal/orders` | Active-order timeline, order history, and the conversation: a sent-back order shows the admin's comment and proposed quantities, which the customer can accept and resubmit, reply to, or withdraw |
@@ -106,6 +110,44 @@ Two limits worth knowing. Overpayment is refused rather than held as a customer 
 One limit worth knowing: the PDF embeds a subset of IBM Plex that covers Latin-1 and the euro. A symbol outside it, such as ₨ or د.إ, cannot be drawn, so invoices fall back to the ISO code. The settings screen says so when you pick one.
 
 **Invoice design** offers three templates — classic, modern and compact — plus an accent colour, a footer line, and toggles for the payment block, the tax identifiers and a signature line. The choice is copied into the invoice snapshot at issue, alongside the seller and buyer details, so switching the template changes the next invoice and never the ones already sent. The preview beside the form redraws as you type, so the look can be judged without issuing a document to find out.
+
+## Inventory and cost
+
+Run `supabase/04-inventory.sql`. Stock never changes without a movement row: `stock_movements` is an append-only stock ledger and the count on the product is a cache the movements explain. Products carry a `cost_price`, a moving average, separate from the selling price.
+
+**Stock is relieved at dispatch, not at approval.** Approving an order is a commercial promise; until the goods leave the warehouse they are still the business's asset. Approval checks stock without moving it, so an order is never approved for goods that are not there. Dispatch posts Dr Cost of Goods Sold / Cr Inventory at moving average cost, as one entry for the whole order.
+
+Editing a product does not overwrite the count. A different figure is a stocktake: it asks for a reason, posts to Stock Adjustments and leaves a row. Typing over the number destroys the evidence an auditor asks for. Shrinkage goes to Stock Adjustments rather than cost of sales, because it is not the cost of goods a customer bought.
+
+## Receivables and credit control
+
+Run `supabase/05-receivables.sql`. `/admin/receivables` ages debt in 30/60/90 buckets measured **from the due date**: an invoice on Net 60 is not thirty days late on day thirty-one.
+
+Each customer has a credit limit, a credit hold and optional payment terms. Approval refuses an order that breaches the limit or the hold, because a limit that can be clicked through is not a limit. Age alone warns instead: a long-overdue invoice may be in dispute over one line, and refusing all trade over it is a commercial decision rather than a system one. A limit of zero means no limit set, not a limit of zero.
+
+## Credit notes
+
+Run `supabase/06-credit-notes.sql`. An issued invoice is immutable, so an error or a return after issue is corrected by a credit note. Quantities are per line, because a credit is usually "two cartons came back damaged" and the note has to say which two. Tax is credited at the invoice's rate, not today's, so you never hand back tax that was not collected. Goods physically returned go back on the shelf and their cost comes out of cost of sales. A credit note is a correction, never a debt, so it never appears in the aged schedule.
+
+## Purchases, suppliers and input tax
+
+Run `supabase/07-purchases.sql`. Entering a bill posts Dr Inventory / Dr Input Tax / Cr Accounts Payable, brings the goods into stock and rolls the moving average cost forward. Freight is capitalised into stock and spread across lines by value, because it is part of what each unit cost to get here.
+
+There is no draft stage for a bill. A sales invoice is a document this business creates and may still be deciding about; a purchase bill has already arrived, and holding it unposted just means the payable is missing from the books. The same supplier invoice number cannot be entered twice: double entry double-counts both the payable and the input tax.
+
+The **Sales tax** tab shows output tax less input tax by month, which is the figure you file. Suppliers are their own table rather than users with a role, because they never sign in.
+
+## Withholding and advances
+
+Run `supabase/08-withholding-advances.sql`. A customer that deducts income tax at source pays less than the invoice; entering the withheld figure settles the invoice anyway and debits Withholding Tax Receivable, since that money is already with the government. A surplus can be held on account against Advances from Customers and applied later. Holding an advance is opt-in: a mismatch is usually a keying error, and parking it silently would hide that.
+
+Both are read from journal lines carrying the customer as the party, so neither can drift away from the balance sheet.
+
+## Reports
+
+`/admin/reports` gives a profit and loss and a balance sheet for the month, the fiscal year, or everything. Both are sums of journal lines rather than maintained totals, so they cannot disagree with the trial balance. Profit for the period is carried into equity as its own line, because income and expense accounts are never closed into retained earnings here.
+
+`/admin/periods` closes a month so a filed figure cannot change underneath you. Closing is enforced by the database; the demo path makes the same refusal, because a lock that only appears to work is worse than none.
 
 ## Email
 
