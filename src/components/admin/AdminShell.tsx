@@ -19,6 +19,7 @@ const ICONS: Record<string, ReactNode> = {
   cms: <><path d="M4 6h16M4 12h10M4 18h13" /><circle cx="18" cy="13" r="2" /></>,
   ledger: <><path d="M4 5.5A1.5 1.5 0 0 1 5.5 4H18a2 2 0 0 1 2 2v13a1 1 0 0 1-1 1H6a2 2 0 0 1-2-2V5.5Z" /><path d="M4 17.5A1.5 1.5 0 0 1 5.5 16H20" /><path d="M8 8h8M8 11.5h5" /></>,
   receivables: <><path d="M3 17.5 9 11l4 3.5L21 6" /><path d="M15 6h6v6" /><path d="M3 21h18" /></>,
+  periods: <><rect x="3" y="4.5" width="18" height="16" rx="2" /><path d="M3 9.5h18M8 3v3M16 3v3" /><path d="M9.5 14.5l1.8 1.8 3.5-3.6" /></>,
   settings: <><circle cx="12" cy="12" r="3.2" /><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6 1.65 1.65 0 0 0 10 3.09V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9c.14.6.63 1.05 1.24 1.11H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z" /></>,
   invoices: <><path d="M6 3h9l4 4v13.5a.5.5 0 0 1-.76.43L16 19.5l-2.5 1.5L11 19.5 8.5 21 6.26 19.93A.5.5 0 0 1 6 19.5V3Z" /><path d="M14 3v4h4" /><path d="M9 11h7M9 14.5h5" /></>,
 };
@@ -39,6 +40,7 @@ const NAV: { href: string; label: string; icon: string; cap: Capability }[] = [
   { href: "/admin/customers",  label: "Customers",         icon: "customers", cap: "customer:read" },
   { href: "/admin/receivables", label: "Aged debtors",     icon: "receivables", cap: "report:read" },
   { href: "/admin/accounts",   label: "Chart of accounts", icon: "ledger",    cap: "ledger:read" },
+  { href: "/admin/periods",    label: "Period close",      icon: "periods",   cap: "ledger:read" },
   { href: "/admin/cms",        label: "CMS Settings",      icon: "cms",       cap: "cms:write" },
   { href: "/admin/settings",   label: "Settings",          icon: "settings",  cap: "settings:finance" },
 ];

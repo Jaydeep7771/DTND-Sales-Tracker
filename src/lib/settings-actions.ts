@@ -11,7 +11,7 @@
 import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
 import { demo } from "@/lib/demo-store";
-import { isDemo, getCurrentStaff } from "@/lib/data";
+import { isDemo, getCurrentStaff, getPeriods } from "@/lib/data";
 import { can } from "@/lib/permissions";
 import type { CompanySettings, InvoiceTemplateDb } from "@/types/database";
 
@@ -100,4 +100,56 @@ export async function updateCompanySettings(patch: SettingsPatch): Promise<Resul
   // The currency and tax rate reach nearly every screen, so revalidate broadly.
   revalidatePath("/", "layout");
   return { ok: true, data: { warning } };
+}
+
+// ---------------------------------------------------------------- periods
+/**
+ * Accounting periods.
+ *
+ * Closing a period is the control that stops a figure already reported to
+ * the tax authority being changed afterwards. The table and the blocking
+ * trigger existed from the start; this is the screen that uses them.
+ */
+export interface PeriodInput { name: string; starts_on: string; ends_on: string }
+
+export async function createPeriod(input: PeriodInput): Promise<Result> {
+  const staff = await getCurrentStaff();
+  if (!can(staff?.role, "settings:finance")) return { ok: false, error: "Your role does not permit this." };
+  if (!input.name.trim()) return { ok: false, error: "Give the period a name, for example 'September 2026'." };
+  if (input.ends_on < input.starts_on) return { ok: false, error: "The end date is before the start date." };
+
+  const periods = await getPeriods();
+  // Overlapping periods would make "is this date closed?" ambiguous.
+  const clash = periods.find((p) => input.starts_on <= p.ends_on && input.ends_on >= p.starts_on);
+  if (clash) return { ok: false, error: `This overlaps ${clash.name} (${clash.starts_on} to ${clash.ends_on}).` };
+
+  const row = { name: input.name.trim(), starts_on: input.starts_on, ends_on: input.ends_on };
+  if (isDemo) {
+    demo.acc.periods.push({ ...row, id: crypto.randomUUID(), closed_at: null, closed_by: null, created_at: new Date().toISOString() });
+  } else {
+    const { error } = await (await createClient()).from("accounting_periods").insert(row);
+    if (error) return { ok: false, error: error.message };
+  }
+  revalidatePath("/admin/periods");
+  return { ok: true };
+}
+
+export async function setPeriodClosed(periodId: string, closed: boolean): Promise<Result> {
+  const staff = await getCurrentStaff();
+  if (!can(staff?.role, "settings:finance")) return { ok: false, error: "Your role does not permit this." };
+
+  const patch = closed
+    ? { closed_at: new Date().toISOString(), closed_by: staff?.id ?? null }
+    : { closed_at: null, closed_by: null };
+
+  if (isDemo) {
+    const p = demo.acc.periods.find((p) => p.id === periodId);
+    if (!p) return { ok: false, error: "Period not found." };
+    Object.assign(p, patch);
+  } else {
+    const { error } = await (await createClient()).from("accounting_periods").update(patch).eq("id", periodId);
+    if (error) return { ok: false, error: error.message };
+  }
+  revalidatePath("/", "layout");
+  return { ok: true };
 }

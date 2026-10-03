@@ -70,6 +70,18 @@ export async function postEntry(input: JournalEntryInput): Promise<PostResult> {
 
     assertBalanced(resolved);
 
+    // A closed period is enforced by a database trigger in live mode. The
+    // demo path has to make the same refusal, otherwise closing a period
+    // would look like it worked and quietly let postings through.
+    if (isDemo) {
+      const closed = demo.acc.periods.find(
+        (p) => p.closed_at && input.entry_date >= p.starts_on && input.entry_date <= p.ends_on,
+      );
+      if (closed) {
+        return { ok: false, error: `${closed.name} is closed. Post this to an open period, or reopen it first.` };
+      }
+    }
+
     const date = new Date(input.entry_date);
     const scope = `JV-${fiscalYearLabel(date, isDemo ? demo.acc.settings.fiscal_year_start_month : 7)}`;
     const seq = await nextNumber(scope);

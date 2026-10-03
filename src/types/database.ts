@@ -88,6 +88,7 @@ type StockMovementsRow = {
 export type StockMovement = StockMovementsRow;
 
 type PeriodsRow = { id: string; name: string; starts_on: string; ends_on: string; closed_at: string | null; closed_by: string | null; created_at: string };
+export type PeriodRow = PeriodsRow;
 
 type AccountTypeDb = "asset" | "liability" | "equity" | "income" | "expense";
 type InvoiceTypeDb = "proforma" | "tax_invoice" | "credit_note";

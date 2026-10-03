@@ -9,7 +9,7 @@ import { configureCurrency, configureTax, currencyFromSettings, taxConfig } from
 import { isStaff } from "@/lib/permissions";
 import { DEMO_ROLE_COOKIE } from "@/lib/demo-store";
 import type { AccountBalance } from "@/lib/accounting";
-import type { AccountRow, CompanySettings, JournalEntryRow } from "@/types/database";
+import type { AccountRow, CompanySettings, JournalEntryRow, PeriodRow } from "@/types/database";
 import type { Product, Announcement, UserProfile, OrderView, OrderLine, OrderMessage, ProductQuery, ProductPage, CategoryCount, DashboardMetrics, OrderStatus } from "@/lib/types";
 
 /** Cookie that picks which demo customer the portal acts as (set by the invite flow). */
@@ -247,6 +247,19 @@ const applyFormatting = cache(async () => {
   configureCurrency(currencyFromSettings(s));
   configureTax({ rate: s.default_tax_rate, label: s.tax_label });
 });
+
+/** Accounting periods, newest first. */
+export async function getPeriods(): Promise<PeriodRow[]> {
+  const rows = isDemo
+    ? demo.acc.periods ?? []
+    : ((await (await createClient()).from("accounting_periods").select("*")).data ?? []);
+  return [...rows].sort((a, b) => b.starts_on.localeCompare(a.starts_on));
+}
+
+/** True when nothing may be posted on this date. */
+export async function isPeriodClosed(date: string): Promise<boolean> {
+  return (await getPeriods()).some((p) => p.closed_at && date >= p.starts_on && date <= p.ends_on);
+}
 
 export async function getAccounts(): Promise<AccountRow[]> {
   await applyFormatting();

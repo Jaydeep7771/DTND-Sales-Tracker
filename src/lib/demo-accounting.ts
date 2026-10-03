@@ -1,6 +1,6 @@
 // Accounting seed for demo mode. Mirrors the chart of accounts in
 // supabase/02-accounting.sql so both modes behave identically.
-import type { AccountRow, CompanySettings, Invoice, InvoiceItem, InvoicePayment, JournalEntryRow, JournalLineRow } from "@/types/database";
+import type { AccountRow, CompanySettings, Invoice, InvoiceItem, InvoicePayment, JournalEntryRow, JournalLineRow, PeriodRow } from "@/types/database";
 
 export interface DemoAccounting {
   accounts: AccountRow[];
@@ -10,6 +10,7 @@ export interface DemoAccounting {
   invoiceItems: InvoiceItem[];
   payments: InvoicePayment[];
   settings: CompanySettings;
+  periods: PeriodRow[];
   counters: Record<string, number>;
   nextEntryNo: number;
 }
@@ -110,5 +111,5 @@ export function seedAccounting(uuid: (seed: string) => string): DemoAccounting {
     invoice_show_tax_ids: true,
   };
 
-  return { accounts, entries: [], lines: [], invoices: [], invoiceItems: [], payments: [], settings, counters: {}, nextEntryNo: 1 };
+  return { accounts, entries: [], lines: [], invoices: [], invoiceItems: [], payments: [], settings, periods: [], counters: {}, nextEntryNo: 1 };
 }
