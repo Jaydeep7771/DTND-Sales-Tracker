@@ -11,6 +11,8 @@ import {
   sendInvoice, updateDraftInvoice, voidInvoice,
 } from "@/lib/invoice-actions";
 import RecordReceiptModal from "./RecordReceiptModal";
+import CreditNoteModal from "./CreditNoteModal";
+import { creditableLines } from "@/lib/credit-notes";
 import { computeInvoiceTotals, SETTLEMENT_LABEL, type Settlement } from "@/lib/accounting";
 import { money, num, shortDate, shortDateTime } from "@/lib/format";
 import type { BadgeTone } from "@/components/ui";
@@ -221,8 +223,19 @@ function IssuedInvoice({ invoice, canInvoice, canRecordPayment }: { invoice: Inv
   const [busy, start] = useTransition();
   const [voiding, setVoiding] = useState(false);
   const [paying, setPaying] = useState(false);
-  const unpaid = invoice.status === "issued" && invoice.balance > 0.005;
+  const [crediting, setCrediting] = useState<Record<string, number> | null>(null);
+  const isCredit = invoice.type === "credit_note";
+  const unpaid = invoice.status === "issued" && !isCredit && invoice.balance > 0.005;
   const [reason, setReason] = useState("");
+
+  function openCredit() {
+    start(async () => {
+      // Asked for on open rather than held in the page, so what is still
+      // creditable is right even if someone else raised a note meanwhile.
+      const left = await creditableLines(invoice.id);
+      setCrediting(left);
+    });
+  }
 
   function resend() {
     start(async () => {
@@ -238,17 +251,23 @@ function IssuedInvoice({ invoice, canInvoice, canRecordPayment }: { invoice: Inv
         <div>
           <div className="flex items-center gap-2.5">
             <span className="font-mono text-[14px] font-semibold">{invoice.invoice_number}</span>
-            <Badge tone={TONE[invoice.settlement]}>{SETTLEMENT_LABEL[invoice.settlement]}</Badge>
+            {isCredit
+              ? <Badge tone="info">Credit note</Badge>
+              : <Badge tone={TONE[invoice.settlement]}>{SETTLEMENT_LABEL[invoice.settlement]}</Badge>}
           </div>
           <div className="text-[11.5px] text-slate mt-1">
             Issued {invoice.issued_at ? shortDateTime(invoice.issued_at) : "—"}
-            {invoice.due_date && invoice.settlement !== "void" && <> · due {shortDate(invoice.due_date)}</>}
+            {!isCredit && invoice.due_date && invoice.settlement !== "void" && <> · due {shortDate(invoice.due_date)}</>}
             {" · "}{num(invoice.items.length)} line{invoice.items.length === 1 ? "" : "s"}
           </div>
         </div>
         <div className="text-right">
-          <div className="font-mono text-[18px] font-semibold">{money(invoice.total)}</div>
-          {invoice.paid > 0 && <div className="text-[11.5px] text-slate">paid {money(invoice.paid)} · balance {money(invoice.balance)}</div>}
+          <div className={`font-mono text-[18px] font-semibold ${isCredit ? "text-success" : ""}`}>
+            {isCredit ? "−" : ""}{money(invoice.total)}
+          </div>
+          {isCredit
+            ? <div className="text-[11.5px] text-slate">applied to the customer&apos;s balance</div>
+            : invoice.paid > 0 && <div className="text-[11.5px] text-slate">paid {money(invoice.paid)} · balance {money(invoice.balance)}</div>}
         </div>
       </div>
       <div className="px-4 py-2.5 border-t border-border bg-surface-softer flex gap-2 flex-wrap justify-end">
@@ -258,13 +277,20 @@ function IssuedInvoice({ invoice, canInvoice, canRecordPayment }: { invoice: Inv
         {canRecordPayment && unpaid && (
           <Button size="sm" onClick={() => setPaying(true)}>Record payment</Button>
         )}
-        {canInvoice && invoice.status === "issued" && (
+        {canInvoice && invoice.status === "issued" && !isCredit && (
           <>
             <Button variant="secondary" size="sm" onClick={resend} disabled={busy}>{busy ? "Sending…" : "Email again"}</Button>
+            {/* Credit note is the correction once money has moved; void is
+                only available while nothing has been paid. */}
+            <Button variant="secondary" size="sm" disabled={busy} onClick={openCredit}>Credit note</Button>
             {invoice.paid === 0 && <Button variant="destructive" size="sm" onClick={() => setVoiding(true)} disabled={busy}>Void</Button>}
           </>
         )}
       </div>
+
+      {crediting && (
+        <CreditNoteModal invoice={invoice} creditable={crediting} onClose={() => setCrediting(null)} />
+      )}
 
       {paying && (
         <RecordReceiptModal

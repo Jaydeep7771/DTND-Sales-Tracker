@@ -471,7 +471,7 @@ export async function getCustomerExposure(customerId: string): Promise<{
   let outstanding = 0;
   let worst = 0;
   for (const i of invoices) {
-    if (i.status !== "issued" || i.balance <= 0.005) continue;
+    if (i.status !== "issued" || i.type === "credit_note" || i.balance <= 0.005) continue;
     outstanding += i.balance;
     worst = Math.max(worst, daysPastDue(i.due_date));
   }
@@ -544,7 +544,9 @@ export async function getCustomerDetail(id: string): Promise<CustomerDetail | nu
     getCustomerLedger(id),
   ]);
 
-  const live = invoices.filter((i) => i.status === "issued");
+  // Credit notes are corrections, not receivables, so they are excluded
+  // from the tiles; their effect is already in each invoice's balance.
+  const live = invoices.filter((i) => i.status === "issued" && i.type !== "credit_note");
   return {
     customer,
     orders,

@@ -60,14 +60,16 @@ export function emptyBuckets(): Record<AgeBucket, number> {
 
 /** Builds the aged schedule from open invoices. */
 export function buildAging(
-  invoices: { customer: { id: string; company_name: string; email: string }; due_date: string | null; balance: number; status: string }[],
+  invoices: { customer: { id: string; company_name: string; email: string }; due_date: string | null; balance: number; status: string; type: string }[],
   customers: { id: string; credit_limit?: number | null; credit_hold?: boolean | null }[],
   today = new Date(),
 ): { rows: AgingRow[]; totals: AgingTotals } {
   const byCustomer = new Map<string, AgingRow>();
 
   for (const inv of invoices) {
-    if (inv.status !== "issued" || inv.balance <= 0.005) continue;
+    // A credit note reduces a balance; it is never itself a debt, so it
+    // must not appear as one in the aged schedule.
+    if (inv.status !== "issued" || inv.type === "credit_note" || inv.balance <= 0.005) continue;
     const c = customers.find((x) => x.id === inv.customer.id);
     const row =
       byCustomer.get(inv.customer.id) ??
