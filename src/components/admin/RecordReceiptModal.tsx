@@ -44,15 +44,22 @@ export default function RecordReceiptModal({
   const [method, setMethod] = useState<PaymentMethod>("bank_transfer");
   const [reference, setReference] = useState("");
   const [note, setNote] = useState("");
+  // Tax the customer deducted at source. It settles the invoice without
+  // arriving as cash, so it counts towards what can be allocated.
+  const [withholding, setWithholding] = useState("");
+  const [holdAsAdvance, setHoldAsAdvance] = useState(false);
   const [alloc, setAlloc] = useState<Record<string, number>>(
     () => (focus ? { [focus.id]: focus.balance } : allocateOldestFirst(openInvoices, 0)),
   );
 
   const allocated = useMemo(() => round2(Object.values(alloc).reduce((a, b) => a + (b || 0), 0)), [alloc]);
-  const unallocated = round2(amount - allocated);
-  const balanced = Math.abs(unallocated) < 0.005 && allocated > 0;
+  const wht = round2(Number(withholding) || 0);
+  const settleable = round2(amount + wht);
+  const unallocated = round2(settleable - allocated);
+  const over = unallocated < -0.005;
+  const balanced = allocated > 0 && !over && (Math.abs(unallocated) < 0.005 || holdAsAdvance);
 
-  function autoAllocate(next = amount) {
+  function autoAllocate(next = round2(amount + (Number(withholding) || 0))) {
     setAlloc(allocateOldestFirst(openInvoices, next));
   }
 
@@ -63,9 +70,12 @@ export default function RecordReceiptModal({
       const res = await recordReceipt({
         customerId, amount, received_on: receivedOn, method, reference, note,
         allocations: Object.entries(alloc).map(([invoice_id, a]) => ({ invoice_id, amount: a })),
+        withholding: wht,
+        allowAdvance: holdAsAdvance,
       });
       if (!res.ok) return setError(res.error);
       toast.push(`Receipt of ${money(res.data!.allocated)} recorded for ${customerName}`, "success");
+      if (res.data!.advance > 0) toast.push(`${money(res.data!.advance)} held on account.`, "info");
       router.refresh();
       onClose();
     });
@@ -87,13 +97,13 @@ export default function RecordReceiptModal({
       <form id="receipt" onSubmit={submit} className="p-5 flex flex-col gap-4">
         {error && <p role="alert" className="rounded-lg bg-danger-bg border border-danger-bd px-3 py-2 text-[13px] text-danger">{error}</p>}
 
-        <div className="grid gap-3.5 grid-cols-2 md:grid-cols-4">
+        <div className="grid gap-3.5 grid-cols-2 md:grid-cols-3">
           <label className="flex flex-col gap-1.5">
             <span className="label">Amount received</span>
             <Input
               mono type="number" min="0" step="0.01" required autoFocus
               value={amount || ""}
-              onChange={(e) => { const v = Math.max(0, Number(e.target.value) || 0); setAmount(v); autoAllocate(v); }}
+              onChange={(e) => { const v = Math.max(0, Number(e.target.value) || 0); setAmount(v); autoAllocate(round2(v + (Number(withholding) || 0))); }}
             />
           </label>
           <label className="flex flex-col gap-1.5">
@@ -105,6 +115,15 @@ export default function RecordReceiptModal({
             <Select value={method} onChange={(e) => setMethod(e.target.value as PaymentMethod)}>
               {METHODS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
             </Select>
+          </label>
+          <label className="flex flex-col gap-1.5">
+            <span className="label">Tax withheld</span>
+            <Input
+              mono type="number" min="0" step="0.01"
+              value={withholding}
+              onChange={(e) => setWithholding(e.target.value)}
+              placeholder="0"
+            />
           </label>
           <label className="flex flex-col gap-1.5">
             <span className="label">Reference{NEEDS_REFERENCE.includes(method) ? "" : " (optional)"}</span>
@@ -178,15 +197,38 @@ export default function RecordReceiptModal({
 
           <div className={`mt-2.5 rounded-lg border px-3 py-2 text-[12.5px] flex items-center justify-between gap-3 ${
             balanced ? "bg-success-bg border-success-bd text-success"
-              : unallocated > 0 ? "bg-warning-bg border-warning-bd text-warning"
-              : "bg-danger-bg border-danger-bd text-danger"}`}>
+              : over ? "bg-danger-bg border-danger-bd text-danger"
+              : "bg-warning-bg border-warning-bd text-warning"}`}>
             <span>
-              {balanced ? "Fully allocated."
-                : unallocated > 0 ? `${money(unallocated)} still unallocated.`
-                : `Over-allocated by ${money(Math.abs(unallocated))}.`}
+              {over ? `Over-allocated by ${money(Math.abs(unallocated))}.`
+                : Math.abs(unallocated) < 0.005 ? "Fully allocated."
+                : holdAsAdvance ? `${money(unallocated)} will be held on account.`
+                : `${money(unallocated)} still unallocated.`}
             </span>
-            <span className="font-mono">{money(allocated)} of {money(amount)}</span>
+            <span className="font-mono">
+              {money(allocated)} of {money(settleable)}
+              {wht > 0 && <span className="opacity-70"> (incl. {money(wht)} withheld)</span>}
+            </span>
           </div>
+
+          {/* Offered only when there is a surplus, so it cannot be left on
+              by accident and quietly swallow a mis-keyed amount. */}
+          {unallocated > 0.005 && !over && (
+            <label className="mt-2 flex items-start gap-2.5 text-[12.5px] text-slate-dark cursor-pointer">
+              <input
+                type="checkbox"
+                checked={holdAsAdvance}
+                onChange={(e) => setHoldAsAdvance(e.target.checked)}
+                className="accent-accent w-4 h-4 mt-0.5"
+              />
+              <span>
+                Hold {money(unallocated)} on account as an advance.
+                <span className="block text-[11.5px] text-slate mt-0.5">
+                  Posts to Advances from Customers, a liability, and can be applied to a future invoice.
+                </span>
+              </span>
+            </label>
+          )}
         </div>
 
         <label className="flex flex-col gap-1.5">

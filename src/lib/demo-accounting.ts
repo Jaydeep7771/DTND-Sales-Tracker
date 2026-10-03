@@ -27,6 +27,7 @@ const COA: [string, string, AccountRow["type"], string | null, boolean][] = [
   ["1100", "Accounts Receivable", "asset", "accounts_receivable", false],
   ["1200", "Inventory", "asset", "inventory", false],
   ["1300", "Input Sales Tax", "asset", "input_tax", false],
+  ["1350", "Withholding Tax Receivable", "asset", "withholding_receivable", false],
   ["1400", "Advances to Suppliers", "asset", "supplier_advances", false],
   ["1500", "Fixed Assets", "asset", null, true],
 

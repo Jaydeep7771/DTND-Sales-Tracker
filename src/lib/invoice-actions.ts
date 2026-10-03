@@ -8,7 +8,7 @@
 import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
 import { demo, newId } from "@/lib/demo-store";
-import { isDemo, getCompanySettings, getCurrentStaff, getInvoice, getInvoices, getOrders, getRemainingToInvoice } from "@/lib/data";
+import { isDemo, getCompanySettings, getCurrentStaff, getCustomerAdvance, getCustomerById, getInvoice, getInvoices, getOrders, getRemainingToInvoice } from "@/lib/data";
 import { can } from "@/lib/permissions";
 import { addDays, businessDate, computeInvoiceTotals, round2, type PaymentMethod } from "@/lib/accounting";
 import { fiscalYearLabel, nextDocumentNumber, postEntry, reverseEntry } from "@/lib/ledger";
@@ -355,17 +355,30 @@ export async function voidInvoice(invoiceId: string, reason: string): Promise<Re
  */
 export interface ReceiptInput {
   customerId: string;
+  /** Cash actually received into the bank or till. */
   amount: number;
   received_on: string;
   method: PaymentMethod;
   reference: string;
   note: string;
   allocations: { invoice_id: string; amount: number }[];
+  /**
+   * Income tax the customer deducted at source. The business has already
+   * paid this to the government through the customer, so it settles the
+   * invoice even though the cash never arrived.
+   */
+  withholding?: number;
+  /**
+   * Treat anything unallocated as money held on account rather than
+   * refusing the receipt. Off by default: a mismatch is usually an error,
+   * and silently parking it would hide that.
+   */
+  allowAdvance?: boolean;
 }
 
 const REFERENCE_REQUIRED: PaymentMethod[] = ["bank_transfer", "cheque", "online"];
 
-export async function recordReceipt(input: ReceiptInput): Promise<Result<{ entryNo: string; allocated: number }>> {
+export async function recordReceipt(input: ReceiptInput): Promise<Result<{ entryNo: string; allocated: number; advance: number }>> {
   const denied = await deny("payment:write"); if (denied) return denied;
 
   const amount = round2(input.amount);
@@ -393,23 +406,49 @@ export async function recordReceipt(input: ReceiptInput): Promise<Result<{ entry
     }
   }
 
+  const withholding = round2(Math.max(0, input.withholding ?? 0));
   const allocated = round2(allocations.reduce((s, a) => s + a.amount, 0));
-  if (Math.abs(allocated - amount) > 0.005) {
-    return allocated > amount
-      ? { ok: false, error: `Allocated ${money(allocated)} but the receipt is ${money(amount)}.` }
-      : { ok: false, error: `${money(round2(amount - allocated))} is still unallocated. Customer advances are not supported yet, so allocate the full amount or reduce it.` };
+
+  // Tax withheld at source settles the invoice without arriving as cash,
+  // so what has to balance is cash plus withholding against allocations.
+  const settled = round2(amount + withholding);
+  const unallocated = round2(settled - allocated);
+
+  if (unallocated < -0.005) {
+    return { ok: false, error: `Allocated ${money(allocated)} but the receipt plus withholding is only ${money(settled)}.` };
+  }
+  if (unallocated > 0.005 && !input.allowAdvance) {
+    return {
+      ok: false,
+      error: `${money(unallocated)} is still unallocated. Allocate it, reduce the amount, or hold it as an advance on the customer's account.`,
+    };
+  }
+  if (withholding > 0 && allocated <= 0.005) {
+    return { ok: false, error: "Withholding has to be allocated against the invoice it was deducted from." };
   }
 
-  // One entry for the whole receipt: Dr bank or cash, Cr receivables.
-  const customer = open[0]?.customer;
+  // One entry for the whole receipt. Cash and withholding are both debits
+  // because both are things the business received; the credit side clears
+  // the receivable and parks any surplus as an advance.
+  const customer = open[0]?.customer ?? (await getCustomerById(input.customerId));
   const posted = await postEntry({
     entry_date: input.received_on,
     narration: `Receipt from ${customer?.company_name ?? "customer"}${input.reference.trim() ? ` · ${input.reference.trim()}` : ""}`,
     source_type: "payment",
     source_id: input.customerId,
     lines: [
-      { system_key: input.method === "cash" ? "cash" : "bank", debit: amount, memo: input.reference.trim() || undefined },
-      { system_key: "accounts_receivable", credit: amount, party_id: input.customerId, memo: allocations.map((a) => byId.get(a.invoice_id)?.invoice_number).filter(Boolean).join(", ") },
+      ...(amount > 0
+        ? [{ system_key: input.method === "cash" ? ("cash" as const) : ("bank" as const), debit: amount, memo: input.reference.trim() || undefined }]
+        : []),
+      ...(withholding > 0
+        ? [{ system_key: "withholding_receivable" as const, debit: withholding, party_id: input.customerId, memo: "Tax deducted at source" }]
+        : []),
+      ...(allocated > 0
+        ? [{ system_key: "accounts_receivable" as const, credit: allocated, party_id: input.customerId, memo: allocations.map((a) => byId.get(a.invoice_id)?.invoice_number).filter(Boolean).join(", ") }]
+        : []),
+      ...(unallocated > 0.005
+        ? [{ system_key: "customer_advances" as const, credit: unallocated, party_id: input.customerId, memo: "Held on account" }]
+        : []),
     ],
   });
   if (!posted.ok) return { ok: false, error: `Ledger posting failed: ${posted.error}` };
@@ -439,7 +478,76 @@ export async function recordReceipt(input: ReceiptInput): Promise<Result<{ entry
     if (error) return { ok: false, error: error.message };
   }
   revalidateAll();
-  return { ok: true, data: { entryNo: posted.entryNo, allocated } };
+  return { ok: true, data: { entryNo: posted.entryNo, allocated, advance: unallocated > 0.005 ? unallocated : 0 } };
+}
+
+/**
+ * Applies money already held on account against open invoices.
+ *
+ * Dr Customer Advances / Cr Accounts Receivable: no cash moves, because
+ * the cash arrived when the advance was taken.
+ */
+export async function applyAdvance(
+  customerId: string,
+  allocations: { invoice_id: string; amount: number }[],
+): Promise<Result<{ entryNo: string; applied: number }>> {
+  const denied = await deny("payment:write"); if (denied) return denied;
+
+  const held = await getCustomerAdvance(customerId);
+  const rows = allocations.map((a) => ({ ...a, amount: round2(a.amount) })).filter((a) => a.amount > 0);
+  if (rows.length === 0) return { ok: false, error: "Choose at least one invoice to apply the advance to." };
+
+  const applied = round2(rows.reduce((s, a) => s + a.amount, 0));
+  if (applied > held + 0.005) {
+    return { ok: false, error: `Only ${money(held)} is held on account for this customer.` };
+  }
+
+  const open = (await getInvoices({ customerId }))
+    .filter((i) => i.status === "issued" && i.type !== "credit_note" && i.balance > 0.005);
+  const byId = new Map(open.map((i) => [i.id, i]));
+  for (const a of rows) {
+    const inv = byId.get(a.invoice_id);
+    if (!inv) return { ok: false, error: "One of the invoices is not open for this customer." };
+    if (a.amount > inv.balance + 0.005) {
+      return { ok: false, error: `${inv.invoice_number} only has ${money(inv.balance)} outstanding.` };
+    }
+  }
+
+  const customer = open[0]?.customer ?? (await getCustomerById(customerId));
+  const iso = businessDate();
+  const posted = await postEntry({
+    entry_date: iso,
+    narration: `Advance applied for ${customer?.company_name ?? "customer"}`,
+    source_type: "payment",
+    source_id: customerId,
+    lines: [
+      { system_key: "customer_advances", debit: applied, party_id: customerId, memo: "Applied to invoices" },
+      { system_key: "accounts_receivable", credit: applied, party_id: customerId, memo: rows.map((a) => byId.get(a.invoice_id)?.invoice_number).filter(Boolean).join(", ") },
+    ],
+  });
+  if (!posted.ok) return { ok: false, error: `Ledger posting failed: ${posted.error}` };
+
+  const staff = await getCurrentStaff();
+  const payments = rows.map((a) => ({
+    invoice_id: a.invoice_id, amount: a.amount, paid_on: iso,
+    method: "adjustment" as const, reference: "Advance applied", note: null,
+    journal_entry_id: posted.entryId, recorded_by: staff?.id ?? null,
+  }));
+
+  if (isDemo) {
+    for (const r of payments) {
+      demo.acc.payments.push({
+        id: newId(), ...r, reversed_at: null, reversal_reason: null, reversed_by: null,
+        created_at: new Date().toISOString(),
+      });
+    }
+  } else {
+    const { error } = await (await createClient()).from("invoice_payments").insert(payments);
+    if (error) return { ok: false, error: error.message };
+  }
+
+  revalidateAll();
+  return { ok: true, data: { entryNo: posted.entryNo, applied } };
 }
 
 /**

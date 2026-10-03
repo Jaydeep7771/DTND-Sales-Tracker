@@ -3,9 +3,10 @@ import { notFound } from "next/navigation";
 import { Badge, Button, Card, OrderBadge } from "@/components/ui";
 import BillingDetailsCard from "@/components/admin/BillingDetailsCard";
 import CreditControlCard from "@/components/admin/CreditControlCard";
+import AdvanceCard from "@/components/admin/AdvanceCard";
 import InviteStatus from "@/components/admin/InviteStatus";
 import ReceiptsCard from "@/components/admin/ReceiptsCard";
-import { getCompanySettings, getCurrentStaff, getCustomerDetail, getReceipts } from "@/lib/data";
+import { getCompanySettings, getCurrentStaff, getCustomerAdvance, getCustomerDetail, getReceipts, getWithheldFrom } from "@/lib/data";
 import { daysPastDue } from "@/lib/receivables";
 import { inviteUrlFor } from "@/lib/invite";
 import { can } from "@/lib/permissions";
@@ -19,8 +20,9 @@ const SETTLEMENT_TONE: Record<Settlement, BadgeTone> = {
 
 export default async function CustomerDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const [detail, staff, receipts, settings] = await Promise.all([
+  const [detail, staff, receipts, settings, advance, withheld] = await Promise.all([
     getCustomerDetail(id), getCurrentStaff(), getReceipts(id), getCompanySettings(),
+    getCustomerAdvance(id), getWithheldFrom(id),
   ]);
   if (!detail) notFound();
 
@@ -212,6 +214,14 @@ export default async function CustomerDetailPage({ params }: { params: Promise<{
         </div>
 
         <div className="flex flex-col gap-5">
+          <AdvanceCard
+            customerId={id}
+            advance={advance}
+            withheld={withheld}
+            openInvoices={openInvoices}
+            canApply={canRecordPayment}
+          />
+
           <CreditControlCard
             customer={customer}
             outstanding={stats.outstanding}

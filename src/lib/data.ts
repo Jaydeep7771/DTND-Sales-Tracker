@@ -497,6 +497,43 @@ export async function getCustomerExposure(customerId: string): Promise<{
   };
 }
 
+/**
+ * Money held on account for a customer, read straight from the ledger so
+ * it cannot drift away from the balance sheet.
+ */
+export async function getCustomerAdvance(customerId: string): Promise<number> {
+  return ledgerPosition(customerId, "customer_advances", "credit");
+}
+
+/** Tax a customer has deducted at source, recoverable at year end. */
+export async function getWithheldFrom(customerId: string): Promise<number> {
+  return ledgerPosition(customerId, "withholding_receivable", "debit");
+}
+
+async function ledgerPosition(
+  partyId: string, systemKey: string, normal: "debit" | "credit",
+): Promise<number> {
+  const accounts = await getAccounts();
+  const account = accounts.find((a) => a.system_key === systemKey);
+  if (!account) return 0;
+
+  let debit = 0;
+  let credit = 0;
+  if (isDemo) {
+    for (const l of demo.acc.lines) {
+      if (l.account_id !== account.id || l.party_id !== partyId) continue;
+      debit += Number(l.debit);
+      credit += Number(l.credit);
+    }
+  } else {
+    const { data } = await (await createClient())
+      .from("journal_lines").select("debit, credit")
+      .eq("account_id", account.id).eq("party_id", partyId);
+    for (const l of data ?? []) { debit += Number(l.debit); credit += Number(l.credit); }
+  }
+  return round2(normal === "credit" ? credit - debit : debit - credit);
+}
+
 export async function getCustomerById(id: string): Promise<UserProfile | null> {
   await applyFormatting();
   if (isDemo) return demo.customers.find((c) => c.id === id) ?? null;
