@@ -2,9 +2,11 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { Badge, Button, Card, OrderBadge } from "@/components/ui";
 import BillingDetailsCard from "@/components/admin/BillingDetailsCard";
+import CreditControlCard from "@/components/admin/CreditControlCard";
 import InviteStatus from "@/components/admin/InviteStatus";
 import ReceiptsCard from "@/components/admin/ReceiptsCard";
-import { getCurrentStaff, getCustomerDetail, getReceipts } from "@/lib/data";
+import { getCompanySettings, getCurrentStaff, getCustomerDetail, getReceipts } from "@/lib/data";
+import { daysPastDue } from "@/lib/receivables";
 import { inviteUrlFor } from "@/lib/invite";
 import { can } from "@/lib/permissions";
 import { SETTLEMENT_LABEL, type Settlement } from "@/lib/accounting";
@@ -17,7 +19,9 @@ const SETTLEMENT_TONE: Record<Settlement, BadgeTone> = {
 
 export default async function CustomerDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const [detail, staff, receipts] = await Promise.all([getCustomerDetail(id), getCurrentStaff(), getReceipts(id)]);
+  const [detail, staff, receipts, settings] = await Promise.all([
+    getCustomerDetail(id), getCurrentStaff(), getReceipts(id), getCompanySettings(),
+  ]);
   if (!detail) notFound();
 
   const { customer, orders, invoices, ledger, stats } = detail;
@@ -26,6 +30,10 @@ export default async function CustomerDetailPage({ params }: { params: Promise<{
   const canRecordPayment = can(staff?.role, "payment:write");
   const openInvoices = invoices.filter((i) => i.status === "issued" && i.balance > 0.005);
   const name = customer.company_name ?? customer.email;
+
+  // The oldest unpaid invoice drives the credit conversation, so compute it
+  // once here rather than inside the card.
+  const worstDaysPastDue = openInvoices.reduce((w, i) => Math.max(w, daysPastDue(i.due_date)), 0);
 
   const tiles = [
     { label: "Invoiced", value: money(stats.invoiced), sub: `${invoices.filter((i) => i.status === "issued").length} issued`, tone: "bg-accent" },
@@ -204,6 +212,14 @@ export default async function CustomerDetailPage({ params }: { params: Promise<{
         </div>
 
         <div className="flex flex-col gap-5">
+          <CreditControlCard
+            customer={customer}
+            outstanding={stats.outstanding}
+            worstDaysPastDue={worstDaysPastDue}
+            canEdit={canBill}
+            defaultTerms={settings.default_terms_days}
+          />
+
           <BillingDetailsCard customer={customer} canEdit={canBill} />
 
           <Card>

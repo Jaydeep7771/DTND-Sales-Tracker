@@ -4,7 +4,7 @@ export type UserRole = "admin" | "finance" | "customer";
 export type OrderStatus = "pending" | "changes_requested" | "approved" | "rejected" | "fulfilled" | "cancelled";
 export type AnnouncementType = "announcement" | "faq";
 
-type UsersRow = { id: string; email: string; role: UserRole; company_name: string | null; billing_address: string | null; ntn: string | null; strn: string | null; invite_token: string | null; invited_at: string | null; activated_at: string | null; created_at: string };
+type UsersRow = { id: string; email: string; role: UserRole; company_name: string | null; billing_address: string | null; ntn: string | null; strn: string | null; credit_limit: number; credit_hold: boolean; payment_terms_days: number | null; invite_token: string | null; invited_at: string | null; activated_at: string | null; created_at: string };
 type OrderMessagesRow = { id: string; order_id: string; author_id: string; author_role: UserRole; body: string; created_at: string };
 type ProductsRow = {
   id: string;
@@ -99,7 +99,7 @@ type Optional<T, K extends keyof T> = Omit<T, K> & Partial<Pick<T, K>>;
 export interface Database {
   public: {
     Tables: {
-      users: { Row: UsersRow; Insert: Optional<UsersRow, "role" | "company_name" | "billing_address" | "ntn" | "strn" | "invite_token" | "invited_at" | "activated_at" | "created_at">; Update: Partial<UsersRow>; Relationships: [] };
+      users: { Row: UsersRow; Insert: Optional<UsersRow, "role" | "company_name" | "billing_address" | "ntn" | "strn" | "credit_limit" | "credit_hold" | "payment_terms_days" | "invite_token" | "invited_at" | "activated_at" | "created_at">; Update: Partial<UsersRow>; Relationships: [] };
       accounts:           { Row: AccountsRow;        Insert: Optional<AccountsRow, "id" | "parent_id" | "system_key" | "is_group" | "is_active" | "created_at">; Update: Partial<AccountsRow>; Relationships: [] };
       journal_entries:    { Row: JournalEntriesRow;  Insert: Optional<JournalEntriesRow, "id" | "source_type" | "source_id" | "reversal_of" | "posted_by" | "posted_at">; Update: Partial<JournalEntriesRow>; Relationships: [] };
       journal_lines:      { Row: JournalLinesRow;    Insert: Optional<JournalLinesRow, "id" | "debit" | "credit" | "party_id" | "memo" | "sort_order">; Update: Partial<JournalLinesRow>; Relationships: [] };

@@ -14,6 +14,7 @@ import type { Product, Announcement, UserProfile, OrderView, OrderLine, OrderMes
 
 /** Cookie that picks which demo customer the portal acts as (set by the invite flow). */
 import { settlementOf } from "@/lib/accounting";
+import { buildAging, daysPastDue, type AgingRow, type AgingTotals } from "@/lib/receivables";
 import type { InvoiceView, InvoiceLineView } from "@/lib/types";
 import type { Invoice, InvoiceItem, InvoicePayment } from "@/types/database";
 
@@ -436,6 +437,36 @@ export interface CustomerDetail {
     outstanding: number;   // unpaid portion
     overdue: number;       // unpaid and past due
     lastOrderAt: string | null;
+  };
+}
+
+/** Aged receivables across every customer, for the collections screen. */
+export async function getAging(): Promise<{ rows: AgingRow[]; totals: AgingTotals }> {
+  await applyFormatting();
+  const [invoices, customers] = await Promise.all([getInvoices(), getCustomers()]);
+  return buildAging(invoices, customers);
+}
+
+/** What one customer owes and how late it is, for the approval decision. */
+export async function getCustomerExposure(customerId: string): Promise<{
+  outstanding: number; worstDaysPastDue: number; creditLimit: number; creditHold: boolean;
+}> {
+  const [invoices, customer] = await Promise.all([
+    getInvoices({ customerId }),
+    getCustomerById(customerId),
+  ]);
+  let outstanding = 0;
+  let worst = 0;
+  for (const i of invoices) {
+    if (i.status !== "issued" || i.balance <= 0.005) continue;
+    outstanding += i.balance;
+    worst = Math.max(worst, daysPastDue(i.due_date));
+  }
+  return {
+    outstanding: Math.round(outstanding * 100) / 100,
+    worstDaysPastDue: worst,
+    creditLimit: Number(customer?.credit_limit ?? 0),
+    creditHold: Boolean(customer?.credit_hold),
   };
 }
 

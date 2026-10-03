@@ -11,8 +11,10 @@ import { can, isStaff, type Capability } from "@/lib/permissions";
 import type { UserRole } from "@/types/database";
 import { inviteEmail, sendEmail } from "@/lib/email";
 import { inviteUrlFor } from "@/lib/invite";
-import { isDemo, getOrder, DEMO_CUSTOMER_COOKIE } from "@/lib/data";
+import { isDemo, getOrder, getCustomerExposure, DEMO_CUSTOMER_COOKIE } from "@/lib/data";
 import { adjustStock, dispatchOrder, recordOpeningStock } from "@/lib/inventory";
+import { creditCheck } from "@/lib/receivables";
+import { money } from "@/lib/format";
 import type { OrderStatus } from "@/types/database";
 import type { SubmitOrderInput } from "@/lib/types";
 
@@ -176,6 +178,13 @@ export async function setOrderStatus(orderId: string, status: OrderStatus): Prom
   if (status === "approved" && (was === "pending" || was === "changes_requested")) {
     const short = await shortOf(order.items);
     if (short) return { ok: false, error: short };
+
+    // Credit control. A limit that can be clicked through is not a limit,
+    // so exceeding it refuses the approval rather than warning about it.
+    const exposure = await getCustomerExposure(order.customer.id);
+    const verdict = creditCheck({ ...exposure, orderValue: order.total }, money);
+    if (!verdict.ok) return { ok: false, error: verdict.reason };
+    if (verdict.warning) warning = verdict.warning;
   }
 
   if (isDemo) {
@@ -321,7 +330,7 @@ export async function onboardCustomer(input: { company_name: string; email: stri
 
   if (isDemo) {
     if (demo.customers.some((c) => c.email === email)) return { ok: false, error: "A customer with that email already exists." };
-    demo.customers.push({ id: newId(), email, role: "customer", company_name: company, billing_address: null, ntn: null, strn: null, invite_token: token, invited_at: now, activated_at: null, created_at: now });
+    demo.customers.push({ id: newId(), email, role: "customer", company_name: company, billing_address: null, ntn: null, strn: null, credit_limit: 0, credit_hold: false, payment_terms_days: null, invite_token: token, invited_at: now, activated_at: null, created_at: now });
   } else {
     const admin = createAdminClient();
     const { data: created, error } = await admin.auth.admin.createUser({
@@ -592,6 +601,44 @@ export async function updateCustomerBilling(customerId: string, input: CustomerB
     if (error) return { ok: false, error: error.message };
   }
   revalidatePath("/admin/customers");
+  revalidatePath(`/admin/customers/${customerId}`);
+  return { ok: true };
+}
+
+export interface CustomerCredit {
+  credit_limit: number;
+  credit_hold: boolean;
+  payment_terms_days: number | null;
+}
+
+/**
+ * Credit terms. Separate from billing details because this is a
+ * commercial decision that blocks approvals, not data entry, and the
+ * capability that guards it should be able to differ later.
+ */
+export async function updateCustomerCredit(customerId: string, input: CustomerCredit): Promise<Result> {
+  const denied = await denyUnless("customer:billing"); if (denied) return denied;
+  if (!(input.credit_limit >= 0)) return { ok: false, error: "A credit limit cannot be negative." };
+  if (input.payment_terms_days !== null && (!Number.isInteger(input.payment_terms_days) || input.payment_terms_days < 0)) {
+    return { ok: false, error: "Payment terms must be a whole number of days." };
+  }
+
+  const patch = {
+    credit_limit: input.credit_limit,
+    credit_hold: input.credit_hold,
+    payment_terms_days: input.payment_terms_days,
+  };
+
+  if (isDemo) {
+    const c = demo.customers.find((c) => c.id === customerId);
+    if (!c) return { ok: false, error: "Customer not found." };
+    Object.assign(c, patch);
+  } else {
+    const { error } = await (await createClient()).from("users").update(patch).eq("id", customerId);
+    if (error) return { ok: false, error: error.message };
+  }
+  revalidatePath("/admin/customers");
+  revalidatePath("/admin/receivables");
   revalidatePath(`/admin/customers/${customerId}`);
   return { ok: true };
 }

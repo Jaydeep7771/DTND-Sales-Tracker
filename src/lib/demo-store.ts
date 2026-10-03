@@ -90,11 +90,20 @@ function seed(): DemoState {
     ["Bahria Trade House", "ali@bahriatrade.pk"],
     ["Indus Motors Depot", "depot@indusmotors.pk"],
     ["Gulberg Builders Mart", "mart@gulbergbm.pk"],
-  ].map(([company, email]) => ({ id: uuid(email), email, role: "customer" as const, company_name: company, billing_address: "Warehouse 3, SITE Area, Karachi", ntn: null, strn: null, invite_token: null, invited_at: now, activated_at: now, created_at: now }));
+  ].map(([company, email], i) => ({
+    id: uuid(email), email, role: "customer" as const, company_name: company,
+    billing_address: "Warehouse 3, SITE Area, Karachi", ntn: null, strn: null,
+    // A spread of limits, with one account stopped, so credit control has
+    // something real to act on rather than every customer being unlimited.
+    credit_limit: [1500000, 750000, 0, 2000000, 400000, 1000000, 600000][i] ?? 0,
+    credit_hold: i === 5,
+    payment_terms_days: null,
+    invite_token: null, invited_at: now, activated_at: now, created_at: now,
+  }));
 
   const staff: UserProfile[] = [
-    { id: uuid("admin"), email: "rashid@dynamictraders.pk", role: "admin", company_name: "Rashid Khan", billing_address: null, ntn: null, strn: null, invite_token: null, invited_at: now, activated_at: now, created_at: now },
-    { id: uuid("finance"), email: "accounts@dynamictraders.pk", role: "finance", company_name: "Nadia Aslam", billing_address: null, ntn: null, strn: null, invite_token: null, invited_at: now, activated_at: now, created_at: now },
+    { id: uuid("admin"), email: "rashid@dynamictraders.pk", role: "admin", company_name: "Rashid Khan", billing_address: null, ntn: null, strn: null, credit_limit: 0, credit_hold: false, payment_terms_days: null, invite_token: null, invited_at: now, activated_at: now, created_at: now },
+    { id: uuid("finance"), email: "accounts@dynamictraders.pk", role: "finance", company_name: "Nadia Aslam", billing_address: null, ntn: null, strn: null, credit_limit: 0, credit_hold: false, payment_terms_days: null, invite_token: null, invited_at: now, activated_at: now, created_at: now },
   ];
   const byEmail = (e: string) => customers.find((c) => c.email === e)!;
 
@@ -226,11 +235,102 @@ function seed(): DemoState {
     });
   }
 
+  // Fulfilled orders are invoiced, so the demo has a receivables book to
+  // age and a revenue line to report on. Due dates are spread across the
+  // aging buckets deliberately: a schedule where everything is current
+  // demonstrates nothing.
+  const TERMS_SPREAD = [75, 45, 20];           // days ago the invoice was raised
+  const taxRate = acc.settings.default_tax_rate;
+  const arAcct = acc.accounts.find((a) => a.system_key === "accounts_receivable")!;
+  const revAcct = acc.accounts.find((a) => a.system_key === "sales_revenue")!;
+  const taxAcct = acc.accounts.find((a) => a.system_key === "output_tax")!;
+  const bankAcct = acc.accounts.find((a) => a.system_key === "bank")!;
+
+  const dayString = (daysBack: number) =>
+    new Date(Date.now() - daysBack * 86400e3).toISOString().slice(0, 10);
+
+  orders
+    .filter((o) => o.status === "fulfilled")
+    .forEach((o, idx) => {
+      const raisedAgo = TERMS_SPREAD[idx % TERMS_SPREAD.length];
+      const issue = dayString(raisedAgo);
+      const due = dayString(raisedAgo - 30);
+      const subtotal = o.items.reduce((a, it) => a + it.quantity * it.price_at_purchase, 0);
+      const tax = Math.round(subtotal * taxRate);
+      const total = subtotal + tax;
+      const customer = customers.find((c) => c.id === o.customer_id)!;
+      const invoiceId = uuid("inv-" + o.order_number);
+      const number = `INV-2627-${String(90 + idx).padStart(5, "0")}`;
+
+      acc.invoices.push({
+        id: invoiceId, invoice_number: number, type: "tax_invoice", status: "issued",
+        order_id: o.id, customer_id: o.customer_id,
+        seller: {
+          name: acc.settings.legal_name, address: acc.settings.address, city: acc.settings.city,
+          country: acc.settings.country, tagline: acc.settings.tagline, initials: acc.settings.logo_initials,
+          template: acc.settings.invoice_template, accent: acc.settings.accent_color,
+          tax_label: acc.settings.tax_label, show_bank: true, show_tax_ids: true,
+        },
+        buyer: { name: customer.company_name, email: customer.email, address: customer.billing_address },
+        currency: acc.settings.currency_code, tax_rate: taxRate,
+        subtotal, discount: 0, freight: 0, tax_amount: tax, total,
+        issue_date: issue, due_date: due, terms_days: 30, notes: null,
+        pdf_path: null, pdf_sha256: null, journal_entry_id: null, credit_note_for: null,
+        issued_by: null, issued_at: issue, voided_at: null, void_reason: null,
+        created_by: null, created_at: issue, updated_at: issue,
+      });
+
+      o.items.forEach((it, i) => {
+        const product = products.find((x) => x.id === it.product_id);
+        acc.invoiceItems.push({
+          id: uuid("invit-" + o.order_number + i), invoice_id: invoiceId, order_item_id: it.id,
+          sku: product?.sku ?? "SKU", name: product?.name ?? "Item",
+          unit_of_measure: product?.unit_of_measure ?? "Each",
+          quantity: it.quantity, unit_price: it.price_at_purchase,
+          line_total: it.quantity * it.price_at_purchase, sort_order: i,
+        });
+      });
+
+      const entryId = uuid("inv-entry-" + o.order_number);
+      acc.entries.push({
+        id: entryId, entry_no: `JV-OPEN-${number}`, entry_date: issue,
+        narration: `Invoice ${number} to ${customer.company_name}`,
+        source_type: "invoice", source_id: invoiceId, reversal_of: null, posted_by: null, posted_at: issue,
+      });
+      acc.lines.push(
+        { id: uuid("ar-" + number), entry_id: entryId, account_id: arAcct.id, debit: total, credit: 0, party_id: o.customer_id, memo: number, sort_order: 0 },
+        { id: uuid("rev-" + number), entry_id: entryId, account_id: revAcct.id, debit: 0, credit: subtotal, party_id: null, memo: null, sort_order: 1 },
+        { id: uuid("tax-" + number), entry_id: entryId, account_id: taxAcct.id, debit: 0, credit: tax, party_id: null, memo: null, sort_order: 2 },
+      );
+      acc.invoices[acc.invoices.length - 1].journal_entry_id = entryId;
+
+      // One invoice is part paid, so the book is not uniformly unpaid.
+      if (idx === 1) {
+        const part = Math.round(total * 0.4);
+        const payEntry = uuid("pay-entry-" + number);
+        const paidOn = dayString(raisedAgo - 12);
+        acc.entries.push({
+          id: payEntry, entry_no: `JV-OPEN-R${idx}`, entry_date: paidOn,
+          narration: `Receipt from ${customer.company_name} · TT-88213`,
+          source_type: "payment", source_id: o.customer_id, reversal_of: null, posted_by: null, posted_at: paidOn,
+        });
+        acc.lines.push(
+          { id: uuid("bank-" + number), entry_id: payEntry, account_id: bankAcct.id, debit: part, credit: 0, party_id: null, memo: "TT-88213", sort_order: 0 },
+          { id: uuid("arc-" + number), entry_id: payEntry, account_id: arAcct.id, debit: 0, credit: part, party_id: o.customer_id, memo: number, sort_order: 1 },
+        );
+        acc.payments.push({
+          id: uuid("pay-" + number), invoice_id: invoiceId, amount: part, paid_on: paidOn,
+          method: "bank_transfer", reference: "TT-88213", note: null, journal_entry_id: payEntry,
+          recorded_by: null, reversed_at: null, reversal_reason: null, reversed_by: null, created_at: paidOn,
+        });
+      }
+    });
+
   return { products, customers, orders, announcements, messages: [], staff, acc, stock, nextOrderNumber: 24189 };
 }
 
 // Bump when DemoState changes shape so HMR-preserved state is reseeded.
-const DEMO_VERSION = 7; // products gained cost, stock ledger added
+const DEMO_VERSION = 9; // products gained cost, stock ledger added
 const g = globalThis as unknown as { __dtndDemo?: DemoState; __dtndDemoVersion?: number };
 if (!g.__dtndDemo || g.__dtndDemoVersion !== DEMO_VERSION) {
   g.__dtndDemo = seed();
