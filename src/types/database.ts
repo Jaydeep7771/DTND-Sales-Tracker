@@ -14,6 +14,7 @@ type ProductsRow = {
   category: string;
   unit_of_measure: string;
   price: number;
+  cost_price: number;                // moving average unit cost
   image_url: string | null;
   stock_quantity: number;
   reorder_point: number;
@@ -76,6 +77,16 @@ type CompanySettingsRow = {
   invoice_show_bank: boolean; invoice_show_signature: boolean; invoice_show_tax_ids: boolean;
 };
 export type InvoiceTemplateDb = "classic" | "modern" | "compact";
+type StockReasonDb = "opening" | "purchase" | "dispatch" | "return_in" | "adjustment";
+export type StockReason = StockReasonDb;
+type StockMovementsRow = {
+  id: string; product_id: string; quantity: number; unit_cost: number; value: number;
+  reason: StockReasonDb; order_id: string | null; invoice_id: string | null;
+  journal_entry_id: string | null; note: string | null; moved_on: string;
+  created_by: string | null; created_at: string;
+};
+export type StockMovement = StockMovementsRow;
+
 type PeriodsRow = { id: string; name: string; starts_on: string; ends_on: string; closed_at: string | null; closed_by: string | null; created_at: string };
 
 type AccountTypeDb = "asset" | "liability" | "equity" | "income" | "expense";
@@ -96,6 +107,7 @@ export interface Database {
       invoice_items:      { Row: InvoiceItemsRow;    Insert: Optional<InvoiceItemsRow, "id" | "order_item_id" | "unit_of_measure" | "sort_order">; Update: Partial<InvoiceItemsRow>; Relationships: [] };
       invoice_payments:   { Row: InvoicePaymentsRow; Insert: Optional<InvoicePaymentsRow, "id" | "paid_on" | "method" | "reference" | "note" | "journal_entry_id" | "recorded_by" | "reversed_at" | "reversal_reason" | "reversed_by" | "created_at">; Update: Partial<InvoicePaymentsRow>; Relationships: [] };
       company_settings:   { Row: CompanySettingsRow; Insert: Partial<CompanySettingsRow>; Update: Partial<CompanySettingsRow>; Relationships: [] };
+      stock_movements:    { Row: StockMovementsRow;  Insert: Optional<StockMovementsRow, "id" | "unit_cost" | "order_id" | "invoice_id" | "journal_entry_id" | "note" | "moved_on" | "created_by" | "created_at">; Update: Partial<StockMovementsRow>; Relationships: [] };
       accounting_periods: { Row: PeriodsRow;         Insert: Optional<PeriodsRow, "id" | "closed_at" | "closed_by" | "created_at">; Update: Partial<PeriodsRow>; Relationships: [] };
       order_messages: { Row: OrderMessagesRow; Insert: Optional<OrderMessagesRow, "id" | "created_at">; Update: Partial<OrderMessagesRow>; Relationships: [] };
       products: {

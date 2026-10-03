@@ -34,6 +34,7 @@ const COA: [string, string, AccountRow["type"], string | null, boolean][] = [
   ["3000", "Equity", "equity", null, true],
   ["3100", "Owner Capital", "equity", "owner_capital", false],
   ["3200", "Retained Earnings", "equity", "retained_earnings", false],
+  ["3300", "Opening Balance Equity", "equity", "opening_balance", false],
 
   ["4000", "Income", "income", null, true],
   ["4100", "Sales Revenue", "income", "sales_revenue", false],
@@ -46,6 +47,7 @@ const COA: [string, string, AccountRow["type"], string | null, boolean][] = [
   ["5300", "Salaries and Wages", "expense", "salaries", false],
   ["5400", "Rent", "expense", "rent", false],
   ["5500", "Utilities", "expense", "utilities", false],
+  ["5600", "Stock Adjustments", "expense", "stock_adjustment", false],
   ["5900", "Other Expenses", "expense", "other_expenses", false],
 ];
 

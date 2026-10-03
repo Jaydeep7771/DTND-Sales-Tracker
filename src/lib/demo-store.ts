@@ -1,7 +1,7 @@
 // In-memory demo data, seeded from the design prototype. Used whenever
 // Supabase keys are not configured so the app is runnable out of the box.
 // State lives on globalThis so it survives Next.js dev HMR reloads.
-import type { Product, Announcement, UserProfile, OrderStatus, OrderMessage } from "@/types/database";
+import type { StockMovement, Product, Announcement, UserProfile, OrderStatus, OrderMessage } from "@/types/database";
 import { seedAccounting, type DemoAccounting } from "@/lib/demo-accounting";
 
 interface DemoOrder {
@@ -24,6 +24,7 @@ interface DemoState {
   messages: OrderMessage[];
   staff: UserProfile[];
   acc: DemoAccounting;
+  stock: StockMovement[];
   nextOrderNumber: number;
 }
 
@@ -67,6 +68,9 @@ function seed(): DemoState {
         category: c.name,
         unit_of_measure: UOM[i % UOM.length],
         price: 92 + ((i * 617) % 90) * 31,
+        // Cost sits a realistic 22-34% below the selling price, so gross
+        // margin is a plausible figure to look at rather than a round one.
+        cost_price: Math.round((92 + ((i * 617) % 90) * 31) * (0.66 + (i % 7) * 0.02)),
         image_url: null,
         stock_quantity: stock,
         reorder_point: 40 + (i % 5) * 20,
@@ -133,11 +137,100 @@ function seed(): DemoState {
     { id: uuid("f4"), title: "Do you deliver outside Sindh?", content: "Yes, freight is quoted at approval.", type: "faq", priority: 4, expires_at: null, is_active: true, created_at: now },
   ];
 
-  return { products, customers, orders, announcements, messages: [], staff, acc: seedAccounting(uuid), nextOrderNumber: 24189 };
+  // Seeded orders have to be possible. Stock is relieved at dispatch now,
+  // so opening stock must cover everything approved but not yet sent, plus
+  // everything already fulfilled. Without this the fixture would contain
+  // orders the warehouse could never have met.
+  const committed = new Map<string, number>();
+  for (const o of orders) {
+    if (o.status !== "approved" && o.status !== "fulfilled") continue;
+    for (const it of o.items) committed.set(it.product_id, (committed.get(it.product_id) ?? 0) + it.quantity);
+  }
+  for (const p of products) {
+    const need = committed.get(p.id) ?? 0;
+    if (need > 0) p.stock_quantity += need;
+  }
+
+  // Opening stock has to exist in the ledger as well as on the shelf,
+  // otherwise Inventory reads zero on the balance sheet while the
+  // warehouse is full. One entry brings the whole catalogue on:
+  // Dr Inventory / Cr Opening Balance Equity.
+  const acc = seedAccounting(uuid);
+  const stock: StockMovement[] = [];
+  const openingValue = products.reduce((a, p) => a + p.stock_quantity * p.cost_price, 0);
+
+  if (openingValue > 0) {
+    const entryId = uuid("open-entry");
+    const inventory = acc.accounts.find((a) => a.system_key === "inventory")!;
+    const equity = acc.accounts.find((a) => a.system_key === "opening_balance")!;
+    const today = now.slice(0, 10);
+
+    acc.entries.push({
+      id: entryId, entry_no: "JV-OPEN-00001", entry_date: today,
+      narration: "Opening stock brought forward", source_type: "stock", source_id: null,
+      reversal_of: null, posted_by: null, posted_at: now,
+    });
+    acc.lines.push(
+      { id: uuid("open-l1"), entry_id: entryId, account_id: inventory.id, debit: openingValue, credit: 0, party_id: null, memo: "Opening stock", sort_order: 0 },
+      { id: uuid("open-l2"), entry_id: entryId, account_id: equity.id, debit: 0, credit: openingValue, party_id: null, memo: "Opening stock", sort_order: 1 },
+    );
+
+    products.forEach((p, i) => {
+      if (p.stock_quantity <= 0) return;
+      stock.push({
+        id: uuid("open-m" + i), product_id: p.id, quantity: p.stock_quantity,
+        unit_cost: p.cost_price, value: p.stock_quantity * p.cost_price,
+        reason: "opening", order_id: null, invoice_id: null, journal_entry_id: entryId,
+        note: "Opening stock", moved_on: today, created_by: null, created_at: now,
+      });
+    });
+  }
+
+  // Orders already marked fulfilled must have moved their stock and posted
+  // their cost, otherwise the demo shows revenue with no cost against it
+  // and a gross margin of 100%.
+  for (const o of orders.filter((o) => o.status === "fulfilled")) {
+    const priced = o.items
+      .map((it) => {
+        const p = products.find((x) => x.id === it.product_id);
+        return p ? { product: p, quantity: it.quantity, unit_cost: p.cost_price } : null;
+      })
+      .filter((x): x is { product: Product; quantity: number; unit_cost: number } => x !== null);
+
+    const cost = priced.reduce((a, l) => a + l.quantity * l.unit_cost, 0);
+    if (cost <= 0) continue;
+
+    const entryId = uuid("disp-" + o.order_number);
+    const cogs = acc.accounts.find((a) => a.system_key === "cogs")!;
+    const inventory = acc.accounts.find((a) => a.system_key === "inventory")!;
+    const day = o.created_at.slice(0, 10);
+
+    acc.entries.push({
+      id: entryId, entry_no: `JV-OPEN-${o.order_number}`, entry_date: day,
+      narration: `Cost of goods dispatched on order ${o.order_number}`,
+      source_type: "dispatch", source_id: o.id, reversal_of: null, posted_by: null, posted_at: o.created_at,
+    });
+    acc.lines.push(
+      { id: uuid("disp-d-" + o.order_number), entry_id: entryId, account_id: cogs.id, debit: cost, credit: 0, party_id: null, memo: o.order_number, sort_order: 0 },
+      { id: uuid("disp-c-" + o.order_number), entry_id: entryId, account_id: inventory.id, debit: 0, credit: cost, party_id: null, memo: o.order_number, sort_order: 1 },
+    );
+
+    priced.forEach((l, i) => {
+      l.product.stock_quantity = Math.max(0, l.product.stock_quantity - l.quantity);
+      stock.push({
+        id: uuid("disp-m-" + o.order_number + i), product_id: l.product.id, quantity: -l.quantity,
+        unit_cost: l.unit_cost, value: -(l.quantity * l.unit_cost), reason: "dispatch",
+        order_id: o.id, invoice_id: null, journal_entry_id: entryId, note: null,
+        moved_on: day, created_by: null, created_at: o.created_at,
+      });
+    });
+  }
+
+  return { products, customers, orders, announcements, messages: [], staff, acc, stock, nextOrderNumber: 24189 };
 }
 
 // Bump when DemoState changes shape so HMR-preserved state is reseeded.
-const DEMO_VERSION = 4; // settings gained currency and invoice presentation fields
+const DEMO_VERSION = 7; // products gained cost, stock ledger added
 const g = globalThis as unknown as { __dtndDemo?: DemoState; __dtndDemoVersion?: number };
 if (!g.__dtndDemo || g.__dtndDemoVersion !== DEMO_VERSION) {
   g.__dtndDemo = seed();

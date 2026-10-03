@@ -12,6 +12,7 @@ export type PaymentMethod = "bank_transfer" | "cheque" | "cash" | "online" | "ad
 export type SystemKey =
   | "cash" | "bank" | "accounts_receivable" | "inventory" | "input_tax" | "supplier_advances"
   | "accounts_payable" | "output_tax" | "customer_advances" | "withholding_payable"
+  | "stock_adjustment" | "opening_balance"
   | "owner_capital" | "retained_earnings"
   | "sales_revenue" | "sales_returns" | "other_income"
   | "cogs" | "freight_expense" | "salaries" | "rent" | "utilities" | "other_expenses";
@@ -46,7 +47,7 @@ export interface JournalLineInput {
 export interface JournalEntryInput {
   entry_date: string;          // ISO date
   narration: string;
-  source_type?: "invoice" | "payment" | "credit_note" | "bill" | "manual";
+  source_type?: "invoice" | "payment" | "credit_note" | "bill" | "dispatch" | "stock" | "manual";
   source_id?: string;
   lines: JournalLineInput[];
 }

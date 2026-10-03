@@ -52,6 +52,9 @@ export default function OrdersView({ orders, initialId, canWrite, canInvoice, ca
       const res = await setOrderStatus(active.id, status);
       if (!res.ok) return toast.push(res.error, "error");
       toast.push(`${active.order_number} ${label}`, "success");
+      // Surfaced rather than swallowed: a dispatch with no cost on a line
+      // leaves gross profit overstated, and finance needs to know now.
+      if (res.data?.warning) toast.push(res.data.warning, "info");
       router.refresh();
     });
   }

@@ -31,7 +31,8 @@ export default function AddProductModal({ categories, demo, onClose }: { categor
   const [image, setImage] = useState<ImageState>({ status: "idle" });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [form, setForm] = useState({ name: "", category: categories[0] ?? "General", unit_of_measure: "Each", price: "", stock_quantity: "", reorder_point: "40", description: "" });
+  const [form, setForm] = useState({ name: "", category: categories[0] ?? "General", unit_of_measure: "Each", price: "",
+    cost_price: "", stock_quantity: "", reorder_point: "40", description: "" });
 
   const set = (k: keyof typeof form) => (e: ChangeEvent<HTMLInputElement | HTMLSelectElement>) => setForm((f) => ({ ...f, [k]: e.target.value }));
 
@@ -70,6 +71,7 @@ export default function AddProductModal({ categories, demo, onClose }: { categor
         category: form.category,
         unit_of_measure: form.unit_of_measure,
         price: Number(form.price),
+        cost_price: Number(form.cost_price || 0),
         stock_quantity: Number(form.stock_quantity || 0),
         reorder_point: Number(form.reorder_point || 0),
         image_url,
@@ -117,6 +119,9 @@ export default function AddProductModal({ categories, demo, onClose }: { categor
         </Field>
         <Field label={`Unit price (${currencyPrefix()})`}>
           <Input mono required type="number" min="0" step="0.01" placeholder="0.00" value={form.price} onChange={set("price")} />
+        </Field>
+        <Field label={`Unit cost (${currencyPrefix()})`}>
+          <Input mono required type="number" min="0" step="0.01" placeholder="0.00" value={form.cost_price} onChange={set("cost_price")} />
         </Field>
         <Field label="Opening stock">
           <Input mono type="number" min="0" step="1" placeholder="0" value={form.stock_quantity} onChange={set("stock_quantity")} />

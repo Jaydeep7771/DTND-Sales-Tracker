@@ -11,7 +11,8 @@ import { can, isStaff, type Capability } from "@/lib/permissions";
 import type { UserRole } from "@/types/database";
 import { inviteEmail, sendEmail } from "@/lib/email";
 import { inviteUrlFor } from "@/lib/invite";
-import { isDemo, DEMO_CUSTOMER_COOKIE } from "@/lib/data";
+import { isDemo, getOrder, DEMO_CUSTOMER_COOKIE } from "@/lib/data";
+import { adjustStock, dispatchOrder, recordOpeningStock } from "@/lib/inventory";
 import type { OrderStatus } from "@/types/database";
 import type { SubmitOrderInput } from "@/lib/types";
 
@@ -50,6 +51,7 @@ export interface NewProductInput {
   category: string;
   unit_of_measure: string;
   price: number;
+  cost_price: number;
   stock_quantity: number;
   reorder_point: number;
   image_url: string | null;
@@ -66,66 +68,140 @@ export async function createProduct(input: NewProductInput): Promise<Result<{ sk
   if (!input.name.trim()) return { ok: false, error: "Product name is required." };
   if (!(input.price >= 0)) return { ok: false, error: "Price must be zero or more." };
   if (!Number.isInteger(input.stock_quantity) || input.stock_quantity < 0) return { ok: false, error: "Opening stock must be a whole number." };
-
-  if (isDemo) {
-    const sku = nextSku(input.category, demo.products.map((p) => p.sku));
-    const now = new Date().toISOString();
-    demo.products.unshift({ id: newId(), sku, ...input, name: input.name.trim(), description: input.description.trim() || null, is_archived: false, created_at: now, updated_at: now });
-    revalidateAll();
-    return { ok: true, data: { sku } };
+  if (!(input.cost_price >= 0)) return { ok: false, error: "Cost must be zero or more." };
+  if (input.cost_price > input.price && input.price > 0) {
+    return { ok: false, error: "Cost is above the selling price. Check the figures before saving." };
   }
 
-  const supabase = await createClient();
-  const { data: skus } = await supabase.from("products").select("sku");
-  const sku = nextSku(input.category, (skus ?? []).map((s) => s.sku));
-  const { error } = await supabase.from("products").insert({ ...input, sku, name: input.name.trim(), description: input.description.trim() || null });
-  if (error) return { ok: false, error: error.message };
+  // Stock is created at zero and brought in by an opening movement, so the
+  // count and the stock ledger agree from the product's first day.
+  let productId: string;
+  let sku: string;
+
+  if (isDemo) {
+    sku = nextSku(input.category, demo.products.map((p) => p.sku));
+    const now = new Date().toISOString();
+    productId = newId();
+    demo.products.unshift({
+      id: productId, sku, ...input, stock_quantity: 0,
+      name: input.name.trim(), description: input.description.trim() || null,
+      is_archived: false, created_at: now, updated_at: now,
+    });
+  } else {
+    const supabase = await createClient();
+    const { data: skus } = await supabase.from("products").select("sku");
+    sku = nextSku(input.category, (skus ?? []).map((s) => s.sku));
+    const { data, error } = await supabase.from("products")
+      .insert({ ...input, sku, stock_quantity: 0, name: input.name.trim(), description: input.description.trim() || null })
+      .select("id").single();
+    if (error || !data) return { ok: false, error: error?.message ?? "Could not create the product." };
+    productId = data.id;
+  }
+
+  if (input.stock_quantity > 0) {
+    const opened = await recordOpeningStock(productId, input.stock_quantity, input.cost_price);
+    if (!opened.ok) return { ok: false, error: opened.error };
+  }
+
   revalidateAll();
   return { ok: true, data: { sku } };
 }
 
-export interface UpdateProductInput { price: number; stock_quantity: number; reorder_point: number; is_archived: boolean; name: string; description: string }
+export interface UpdateProductInput {
+  price: number; cost_price: number; stock_quantity: number; reorder_point: number;
+  is_archived: boolean; name: string; description: string; stock_note: string;
+}
 
+/**
+ * Stock is not edited here even though the form shows a box for it. A
+ * difference between the counted figure and the recorded one is a
+ * stocktake adjustment: it moves stock, posts to Stock Adjustments and
+ * leaves a row saying who counted it and why. Typing over the number
+ * would destroy exactly the evidence an auditor asks for.
+ */
 export async function updateProduct(id: string, input: UpdateProductInput): Promise<Result> {
   { const denied = await denyUnless("product:write"); if (denied) return denied; }
   if (!input.name.trim()) return { ok: false, error: "Product name is required." };
   if (!(input.price >= 0)) return { ok: false, error: "Price must be zero or more." };
+  if (!(input.cost_price >= 0)) return { ok: false, error: "Cost must be zero or more." };
   if (!Number.isInteger(input.stock_quantity) || input.stock_quantity < 0) return { ok: false, error: "Stock must be a whole number." };
+
+  const fields = {
+    price: input.price, cost_price: input.cost_price, reorder_point: input.reorder_point,
+    is_archived: input.is_archived, name: input.name.trim(),
+    description: input.description.trim() || null,
+  };
+
   if (isDemo) {
     const p = demo.products.find((p) => p.id === id);
     if (!p) return { ok: false, error: "Product not found." };
-    Object.assign(p, { ...input, name: input.name.trim(), description: input.description.trim() || null, updated_at: new Date().toISOString() });
-    revalidateAll();
-    return { ok: true };
+    Object.assign(p, fields, { updated_at: new Date().toISOString() });
+  } else {
+    const { error } = await (await createClient()).from("products").update(fields).eq("id", id);
+    if (error) return { ok: false, error: error.message };
   }
-  const { error } = await (await createClient()).from("products").update({ ...input, name: input.name.trim(), description: input.description.trim() || null }).eq("id", id);
-  if (error) return { ok: false, error: error.message };
+
+  const adjusted = await adjustStock(id, input.stock_quantity, input.stock_note.trim());
+  if (!adjusted.ok) return { ok: false, error: adjusted.error };
+
   revalidateAll();
   return { ok: true };
 }
 
 // ---------------------------------------------------------------- orders
-export async function setOrderStatus(orderId: string, status: OrderStatus): Promise<Result> {
+export async function setOrderStatus(orderId: string, status: OrderStatus): Promise<Result<{ warning?: string }>> {
   { const denied = await denyUnless("order:write"); if (denied) return denied; }
+  let warning: string | undefined;
+  const order = await getOrder(orderId);
+  if (!order) return { ok: false, error: "Order not found." };
+  const was = order.status;
+
+  // Marking an order fulfilled is the moment goods leave the building, so
+  // that is where stock is relieved and the cost of sale is posted. Doing
+  // it at approval would have taken the goods off the balance sheet while
+  // they were still on the shelf.
+  if (status === "fulfilled" && was !== "fulfilled") {
+    const dispatched = await dispatchOrder(
+      orderId,
+      order.items.map((i) => ({ product_id: i.product_id, name: i.name, quantity: i.quantity })),
+    );
+    if (!dispatched.ok) return { ok: false, error: dispatched.error };
+    if (dispatched.uncosted.length) {
+      warning = `Dispatched, but ${dispatched.uncosted.length} line${dispatched.uncosted.length === 1 ? " has" : "s have"} no cost recorded, so gross profit on this order is overstated: ${dispatched.uncosted.join(", ")}.`;
+    }
+  }
+
+  // Approval checks stock without moving it, so an order is never approved
+  // for goods that are not there.
+  if (status === "approved" && (was === "pending" || was === "changes_requested")) {
+    const short = await shortOf(order.items);
+    if (short) return { ok: false, error: short };
+  }
+
   if (isDemo) {
     const o = demo.orders.find((o) => o.id === orderId);
     if (!o) return { ok: false, error: "Order not found." };
-    // Approving deducts stock, mirroring the DB trigger you'd add later.
-    if (status === "approved" && (o.status === "pending" || o.status === "changes_requested")) {
-      for (const it of o.items) {
-        const p = demo.products.find((p) => p.id === it.product_id);
-        if (p) p.stock_quantity = Math.max(0, p.stock_quantity - it.quantity);
-      }
-    }
     o.status = status;
-    revalidateAll();
-    return { ok: true };
+  } else {
+    const { error } = await (await createClient()).from("orders").update({ status }).eq("id", orderId);
+    if (error) return { ok: false, error: error.message };
   }
-  const supabase = await createClient();
-  const { error } = await supabase.from("orders").update({ status }).eq("id", orderId);
-  if (error) return { ok: false, error: error.message };
   revalidateAll();
-  return { ok: true };
+  return { ok: true, data: warning ? { warning } : undefined };
+}
+
+/** Names the first line that cannot be met from stock, for the approval guard. */
+async function shortOf(items: { product_id: string; name: string; quantity: number }[]): Promise<string | null> {
+  const products = isDemo
+    ? demo.products
+    : ((await (await createClient()).from("products").select("id, name, stock_quantity")).data ?? []);
+  for (const it of items) {
+    const p = products.find((x) => x.id === it.product_id);
+    if (p && p.stock_quantity < it.quantity) {
+      return `${p.name} has ${p.stock_quantity} in stock but this order needs ${it.quantity}. Send the order back with revised quantities, or restock first.`;
+    }
+  }
+  return null;
 }
 
 export async function submitOrder(input: SubmitOrderInput): Promise<Result<{ order_number: string; id: string }>> {
