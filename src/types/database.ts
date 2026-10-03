@@ -87,6 +87,42 @@ type StockMovementsRow = {
 };
 export type StockMovement = StockMovementsRow;
 
+type BillStatusDb = "draft" | "posted" | "void";
+export type BillStatus = BillStatusDb;
+
+type SuppliersRow = {
+  id: string; name: string; contact_name: string | null; email: string | null;
+  phone: string | null; address: string | null; ntn: string | null; strn: string | null;
+  payment_terms_days: number; notes: string | null; is_active: boolean;
+  created_at: string; updated_at: string;
+};
+export type Supplier = SuppliersRow;
+
+type BillsRow = {
+  id: string; supplier_id: string; supplier_ref: string; bill_number: string | null;
+  status: BillStatusDb; bill_date: string; due_date: string | null; terms_days: number;
+  tax_rate: number; subtotal: number; freight: number; tax_amount: number; total: number;
+  notes: string | null; journal_entry_id: string | null;
+  posted_by: string | null; posted_at: string | null;
+  voided_at: string | null; void_reason: string | null;
+  created_by: string | null; created_at: string; updated_at: string;
+};
+export type Bill = BillsRow;
+
+type BillItemsRow = {
+  id: string; bill_id: string; product_id: string | null; description: string;
+  quantity: number; unit_cost: number; line_total: number; sort_order: number;
+};
+export type BillItem = BillItemsRow;
+
+type BillPaymentsRow = {
+  id: string; bill_id: string; amount: number; paid_on: string; method: PaymentMethodDb;
+  reference: string | null; note: string | null; journal_entry_id: string | null;
+  recorded_by: string | null; reversed_at: string | null; reversal_reason: string | null;
+  reversed_by: string | null; created_at: string;
+};
+export type BillPayment = BillPaymentsRow;
+
 type PeriodsRow = { id: string; name: string; starts_on: string; ends_on: string; closed_at: string | null; closed_by: string | null; created_at: string };
 export type PeriodRow = PeriodsRow;
 
@@ -109,6 +145,10 @@ export interface Database {
       invoice_payments:   { Row: InvoicePaymentsRow; Insert: Optional<InvoicePaymentsRow, "id" | "paid_on" | "method" | "reference" | "note" | "journal_entry_id" | "recorded_by" | "reversed_at" | "reversal_reason" | "reversed_by" | "created_at">; Update: Partial<InvoicePaymentsRow>; Relationships: [] };
       company_settings:   { Row: CompanySettingsRow; Insert: Partial<CompanySettingsRow>; Update: Partial<CompanySettingsRow>; Relationships: [] };
       stock_movements:    { Row: StockMovementsRow;  Insert: Optional<StockMovementsRow, "id" | "unit_cost" | "order_id" | "invoice_id" | "journal_entry_id" | "note" | "moved_on" | "created_by" | "created_at">; Update: Partial<StockMovementsRow>; Relationships: [] };
+      suppliers:      { Row: SuppliersRow;    Insert: Optional<SuppliersRow, "id" | "contact_name" | "email" | "phone" | "address" | "ntn" | "strn" | "payment_terms_days" | "notes" | "is_active" | "created_at" | "updated_at">; Update: Partial<SuppliersRow>; Relationships: [] };
+      bills:          { Row: BillsRow;        Insert: Optional<BillsRow, "id" | "bill_number" | "status" | "due_date" | "terms_days" | "tax_rate" | "subtotal" | "freight" | "tax_amount" | "total" | "notes" | "journal_entry_id" | "posted_by" | "posted_at" | "voided_at" | "void_reason" | "created_by" | "created_at" | "updated_at">; Update: Partial<BillsRow>; Relationships: [] };
+      bill_items:     { Row: BillItemsRow;    Insert: Optional<BillItemsRow, "id" | "product_id" | "sort_order">; Update: Partial<BillItemsRow>; Relationships: [] };
+      bill_payments:  { Row: BillPaymentsRow; Insert: Optional<BillPaymentsRow, "id" | "paid_on" | "method" | "reference" | "note" | "journal_entry_id" | "recorded_by" | "reversed_at" | "reversal_reason" | "reversed_by" | "created_at">; Update: Partial<BillPaymentsRow>; Relationships: [] };
       accounting_periods: { Row: PeriodsRow;         Insert: Optional<PeriodsRow, "id" | "closed_at" | "closed_by" | "created_at">; Update: Partial<PeriodsRow>; Relationships: [] };
       order_messages: { Row: OrderMessagesRow; Insert: Optional<OrderMessagesRow, "id" | "created_at">; Update: Partial<OrderMessagesRow>; Relationships: [] };
       products: {

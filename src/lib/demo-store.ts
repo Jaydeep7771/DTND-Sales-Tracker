@@ -334,7 +334,7 @@ function seed(): DemoState {
 }
 
 // Bump when DemoState changes shape so HMR-preserved state is reseeded.
-const DEMO_VERSION = 11; // accounting periods added to demo state
+const DEMO_VERSION = 12; // accounting periods added to demo state
 const g = globalThis as unknown as { __dtndDemo?: DemoState; __dtndDemoVersion?: number };
 if (!g.__dtndDemo || g.__dtndDemoVersion !== DEMO_VERSION) {
   g.__dtndDemo = seed();

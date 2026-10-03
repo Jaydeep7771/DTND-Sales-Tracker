@@ -9,11 +9,11 @@ import { configureCurrency, configureTax, currencyFromSettings, taxConfig } from
 import { isStaff } from "@/lib/permissions";
 import { DEMO_ROLE_COOKIE } from "@/lib/demo-store";
 import type { AccountBalance } from "@/lib/accounting";
-import type { AccountRow, CompanySettings, JournalEntryRow, PeriodRow } from "@/types/database";
+import type { AccountRow, Bill, BillItem, BillPayment, CompanySettings, JournalEntryRow, PeriodRow, Supplier } from "@/types/database";
 import type { Product, Announcement, UserProfile, OrderView, OrderLine, OrderMessage, ProductQuery, ProductPage, CategoryCount, DashboardMetrics, OrderStatus } from "@/lib/types";
 
 /** Cookie that picks which demo customer the portal acts as (set by the invite flow). */
-import { settlementOf } from "@/lib/accounting";
+import { businessDate, round2, settlementOf } from "@/lib/accounting";
 import { buildAging, daysPastDue, type AgingRow, type AgingTotals } from "@/lib/receivables";
 import type { InvoiceView, InvoiceLineView } from "@/lib/types";
 import type { Invoice, InvoiceItem, InvoicePayment } from "@/types/database";
@@ -627,4 +627,139 @@ export async function getReceipts(customerId: string): Promise<ReceiptView[]> {
     }
   }
   return [...groups.values()].sort((a, b) => b.received_on.localeCompare(a.received_on));
+}
+
+// ---------------------------------------------------------------- purchases
+export interface BillView extends Bill {
+  supplier_name: string;
+  items: BillItem[];
+  paid: number;
+  balance: number;
+  settlement: "open" | "part_paid" | "paid" | "overdue" | "void";
+}
+
+export async function getSuppliers(): Promise<Supplier[]> {
+  await applyFormatting();
+  const rows = isDemo
+    ? demo.acc.suppliers ?? []
+    : ((await (await createClient()).from("suppliers").select("*")).data ?? []);
+  return [...rows].sort((a, b) => a.name.localeCompare(b.name));
+}
+
+export async function getSupplier(id: string): Promise<Supplier | null> {
+  return (await getSuppliers()).find((s) => s.id === id) ?? null;
+}
+
+function buildBill(bill: Bill, items: BillItem[], payments: BillPayment[], supplierName: string): BillView {
+  const live = payments.filter((p) => !p.reversed_at);
+  const paid = round2(live.reduce((a, p) => a + Number(p.amount), 0));
+  const balance = round2(Number(bill.total) - paid);
+  const overdue = bill.due_date ? bill.due_date < businessDate() : false;
+  return {
+    ...bill,
+    supplier_name: supplierName,
+    items: [...items].sort((a, b) => a.sort_order - b.sort_order),
+    paid,
+    balance,
+    settlement:
+      bill.status === "void" ? "void"
+      : balance <= 0.005 ? "paid"
+      : paid > 0 ? "part_paid"
+      : overdue ? "overdue"
+      : "open",
+  };
+}
+
+export async function getBills(opts: { supplierId?: string } = {}): Promise<BillView[]> {
+  await applyFormatting();
+  const suppliers = await getSuppliers();
+  const name = (id: string) => suppliers.find((s) => s.id === id)?.name ?? "Unknown supplier";
+
+  if (isDemo) {
+    return (demo.acc.bills ?? [])
+      .filter((b) => !opts.supplierId || b.supplier_id === opts.supplierId)
+      .map((b) =>
+        buildBill(
+          b,
+          (demo.acc.billItems ?? []).filter((i) => i.bill_id === b.id),
+          (demo.acc.billPayments ?? []).filter((p) => p.bill_id === b.id),
+          name(b.supplier_id),
+        ),
+      )
+      .sort((a, b) => b.bill_date.localeCompare(a.bill_date));
+  }
+
+  // Fetched separately rather than as an embedded select: the generated
+  // types do not carry these relationships, and three small queries are
+  // clearer than fighting the type generator.
+  const supabase = await createClient();
+  let q = supabase.from("bills").select("*").order("bill_date", { ascending: false });
+  if (opts.supplierId) q = q.eq("supplier_id", opts.supplierId);
+  const { data: bills } = await q;
+  if (!bills?.length) return [];
+
+  const ids = bills.map((b) => b.id);
+  const [{ data: items }, { data: payments }] = await Promise.all([
+    supabase.from("bill_items").select("*").in("bill_id", ids),
+    supabase.from("bill_payments").select("*").in("bill_id", ids),
+  ]);
+
+  return bills.map((b) =>
+    buildBill(
+      b,
+      (items ?? []).filter((i) => i.bill_id === b.id),
+      (payments ?? []).filter((p) => p.bill_id === b.id),
+      name(b.supplier_id),
+    ),
+  );
+}
+
+export async function getBill(id: string): Promise<BillView | null> {
+  return (await getBills()).find((b) => b.id === id) ?? null;
+}
+
+/** Aged creditors, the mirror of the debtors schedule. */
+export async function getPayablesAging(): Promise<{ rows: AgingRow[]; totals: AgingTotals }> {
+  const bills = await getBills();
+  const asInvoices = bills
+    .filter((b) => b.status === "posted")
+    .map((b) => ({
+      customer: { id: b.supplier_id, company_name: b.supplier_name, email: "" },
+      due_date: b.due_date,
+      balance: b.balance,
+      status: "issued",
+      type: "tax_invoice",
+    }));
+  return buildAging(asInvoices, []);
+}
+
+/** Output tax less input tax, by month, which is what gets filed. */
+export interface TaxMonth { month: string; output: number; input: number; net: number }
+
+export async function getSalesTaxSummary(): Promise<TaxMonth[]> {
+  await applyFormatting();
+  const [invoices, bills] = await Promise.all([getInvoices(), getBills()]);
+  const months = new Map<string, TaxMonth>();
+
+  const bucket = (date: string) => {
+    const key = date.slice(0, 7);
+    const row = months.get(key) ?? { month: key, output: 0, input: 0, net: 0 };
+    months.set(key, row);
+    return row;
+  };
+
+  for (const i of invoices) {
+    if (i.status !== "issued" || !i.issue_date) continue;
+    // A credit note gives tax back, so it reduces output tax rather than
+    // adding to it.
+    bucket(i.issue_date).output += i.type === "credit_note" ? -i.tax_amount : i.tax_amount;
+  }
+  for (const b of bills) {
+    if (b.status !== "posted") continue;
+    bucket(b.bill_date).input += Number(b.tax_amount);
+  }
+
+  return [...months.values()]
+    .map((m) => ({ ...m, output: round2(m.output), input: round2(m.input), net: round2(m.output - m.input) }))
+    .sort((a, b) => b.month.localeCompare(a.month));
 }

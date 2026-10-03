@@ -1,6 +1,6 @@
 // Accounting seed for demo mode. Mirrors the chart of accounts in
 // supabase/02-accounting.sql so both modes behave identically.
-import type { AccountRow, CompanySettings, Invoice, InvoiceItem, InvoicePayment, JournalEntryRow, JournalLineRow, PeriodRow } from "@/types/database";
+import type { AccountRow, Bill, BillItem, BillPayment, CompanySettings, Invoice, InvoiceItem, InvoicePayment, JournalEntryRow, JournalLineRow, PeriodRow, Supplier } from "@/types/database";
 
 export interface DemoAccounting {
   accounts: AccountRow[];
@@ -11,6 +11,10 @@ export interface DemoAccounting {
   payments: InvoicePayment[];
   settings: CompanySettings;
   periods: PeriodRow[];
+  suppliers: Supplier[];
+  bills: Bill[];
+  billItems: BillItem[];
+  billPayments: BillPayment[];
   counters: Record<string, number>;
   nextEntryNo: number;
 }
@@ -111,5 +115,20 @@ export function seedAccounting(uuid: (seed: string) => string): DemoAccounting {
     invoice_show_tax_ids: true,
   };
 
-  return { accounts, entries: [], lines: [], invoices: [], invoiceItems: [], payments: [], settings, periods: [], counters: {}, nextEntryNo: 1 };
+  // A couple of suppliers so purchases can be entered without setup. No
+  // bills: those should be entered by hand so the stock and cost effects
+  // are seen happening rather than arriving pre-cooked.
+  const suppliers: Supplier[] = [
+    ["Indus Fasteners (Pvt) Ltd", "Imran Qureshi", "sales@indusfasteners.pk", "3012345-7", 30],
+    ["Karachi Packaging Mills", "Sana Riaz", "orders@kpm.com.pk", "2298761-4", 45],
+    ["Pak Lubricants Trading", "Faisal Ahmed", "faisal@paklub.pk", "4411902-2", 15],
+  ].map(([name, contact, email, ntn, terms]) => ({
+    id: uuid("sup-" + email),
+    name: name as string, contact_name: contact as string, email: email as string,
+    phone: null, address: "SITE Area, Karachi", ntn: ntn as string, strn: null,
+    payment_terms_days: terms as number, notes: null, is_active: true,
+    created_at: now, updated_at: now,
+  }));
+
+  return { accounts, entries: [], lines: [], invoices: [], invoiceItems: [], payments: [], settings, periods: [], suppliers, bills: [], billItems: [], billPayments: [], counters: {}, nextEntryNo: 1 };
 }
