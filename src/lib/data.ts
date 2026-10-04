@@ -428,15 +428,34 @@ export async function getInvoice(id: string): Promise<InvoiceView | null> {
 }
 
 /** How much of each order line is still uninvoiced, for partial dispatch. */
+/**
+ * How much of each order line is currently invoiced.
+ *
+ * A credit note carries the original line's order_item_id so it can be
+ * matched back, which means it has to be SUBTRACTED here, not added.
+ * Adding it meant that invoicing 120 and crediting 20 recorded 140 as
+ * invoiced, and the 20 that came back could never be sold again: the
+ * order reported "every line has already been invoiced", which was the
+ * opposite of the truth.
+ *
+ * The figure is allowed to go negative only in the sense that it is
+ * clamped at zero: crediting more than was invoiced on a line is already
+ * refused when the credit note is raised.
+ */
 export async function getRemainingToInvoice(orderId: string): Promise<Map<string, number>> {
-  const invoices = (await getInvoices({ orderId })).filter((i) => i.status !== "void");
+  const documents = (await getInvoices({ orderId })).filter((i) => i.status !== "void");
   const used = new Map<string, number>();
-  for (const inv of invoices) {
-    for (const l of inv.items) {
+
+  for (const doc of documents) {
+    // A credit note gives quantity back to the order; an invoice takes it.
+    const direction = doc.type === "credit_note" ? -1 : 1;
+    for (const l of doc.items) {
       if (!l.order_item_id) continue;
-      used.set(l.order_item_id, (used.get(l.order_item_id) ?? 0) + l.quantity);
+      used.set(l.order_item_id, (used.get(l.order_item_id) ?? 0) + direction * l.quantity);
     }
   }
+
+  for (const [id, qty] of used) used.set(id, Math.max(0, qty));
   return used;
 }
 

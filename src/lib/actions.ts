@@ -14,6 +14,7 @@ import { inviteUrlFor } from "@/lib/invite";
 import { isDemo, getOrder, getCustomerExposure, DEMO_CUSTOMER_COOKIE } from "@/lib/data";
 import { adjustStock, dispatchOrder, recordOpeningStock } from "@/lib/inventory";
 import { creditCheck } from "@/lib/receivables";
+import { transitionError } from "@/lib/order-status";
 import { money } from "@/lib/format";
 import type { OrderStatus } from "@/types/database";
 import type { SubmitOrderInput } from "@/lib/types";
@@ -151,12 +152,40 @@ export async function updateProduct(id: string, input: UpdateProductInput): Prom
 }
 
 // ---------------------------------------------------------------- orders
-export async function setOrderStatus(orderId: string, status: OrderStatus): Promise<Result<{ warning?: string }>> {
-  { const denied = await denyUnless("order:write"); if (denied) return denied; }
+export async function setOrderStatus(
+  orderId: string,
+  status: OrderStatus,
+  opts: { asCustomer?: boolean } = {},
+): Promise<Result<{ warning?: string }>> {
+  // A customer withdrawing their own order is the one case where the
+  // order:write capability does not apply; everything else is staff.
+  if (!opts.asCustomer) {
+    const denied = await denyUnless("order:write"); if (denied) return denied;
+  }
   let warning: string | undefined;
   const order = await getOrder(orderId);
   if (!order) return { ok: false, error: "Order not found." };
   const was = order.status;
+
+  // Every move through this function is checked against one transition
+  // table. The screens already hid the buttons that do not apply; this is
+  // the half that was missing, so a crafted request cannot do what the UI
+  // refuses to offer.
+  const refusal = transitionError(was, status);
+  if (refusal) return { ok: false, error: refusal };
+  if (was === status) return { ok: true };
+
+  // An order with money already on it cannot simply be dropped: the
+  // invoice would be left outstanding against goods nobody is sending.
+  if (status === "cancelled") {
+    const live = order.invoices.filter((i) => i.status === "issued" && i.type !== "credit_note");
+    if (live.length > 0) {
+      return {
+        ok: false,
+        error: `${live[0].invoice_number} has been issued against this order. Void it, or raise a credit note, before withdrawing the order.`,
+      };
+    }
+  }
 
   // Marking an order fulfilled is the moment goods leave the building, so
   // that is where stock is relieved and the cost of sale is posted. Doing
@@ -438,6 +467,11 @@ async function addMessage(orderId: string, by: { id: string; role: UserRole }, b
 export async function sendBackOrder(orderId: string, comment: string, quantities: Record<string, number>): Promise<Result> {
   if (!comment.trim()) return { ok: false, error: "Add a comment so the customer knows what to change." };
   const denied = await denyUnless("order:write"); if (denied) return denied;
+
+  const current = await getOrder(orderId);
+  if (!current) return { ok: false, error: "Order not found." };
+  const blocked = transitionError(current.status, "changes_requested");
+  if (blocked) return { ok: false, error: blocked };
   const by = isDemo ? { id: DEMO_ADMIN_ID, role: "admin" as const } : await author();
   if (!by) return { ok: false, error: "Sign in first." };
 
@@ -510,6 +544,19 @@ export async function adminReplyToOrder(orderId: string, body: string): Promise<
 export async function resubmitOrder(orderId: string, quantities: Record<string, number>, note: string): Promise<Result> {
   const by = await author();
   if (!by) return { ok: false, error: "Sign in first." };
+
+  const existing = await getOrder(orderId);
+  if (!existing || existing.customer.id !== by.id) return { ok: false, error: "Order not found." };
+  // Only an order the admin sent back is the customer's to change.
+  if (existing.status !== "changes_requested") {
+    return {
+      ok: false,
+      error: existing.status === "pending"
+        ? "This order is already with us for approval."
+        : transitionError(existing.status, "pending") ?? "This order can no longer be changed.",
+    };
+  }
+
   if (isDemo) {
     const o = demo.orders.find((o) => o.id === orderId && o.customer_id === by.id);
     if (!o) return { ok: false, error: "Order not found." };
@@ -534,14 +581,19 @@ export async function resubmitOrder(orderId: string, quantities: Record<string, 
 export async function withdrawOrder(orderId: string, reason: string): Promise<Result> {
   const by = await author();
   if (!by) return { ok: false, error: "Sign in first." };
-  if (isDemo) {
-    const o = demo.orders.find((o) => o.id === orderId && o.customer_id === by.id);
-    if (!o) return { ok: false, error: "Order not found." };
-    o.status = "cancelled";
-  } else {
-    const { error } = await (await createClient()).from("orders").update({ status: "cancelled" }).eq("id", orderId);
-    if (error) return { ok: false, error: error.message };
-  }
+
+  // Ownership is checked here as well as by row level security, so the
+  // demo path cannot be used to withdraw somebody else's order.
+  const order = await getOrder(orderId);
+  if (!order || order.customer.id !== by.id) return { ok: false, error: "Order not found." };
+
+  // Routed through setOrderStatus rather than writing the status directly,
+  // so the transition table and the issued-invoice check both apply. This
+  // is what previously allowed a dispatched, invoiced order to be
+  // withdrawn from the portal.
+  const res = await setOrderStatus(orderId, "cancelled", { asCustomer: true });
+  if (!res.ok) return res;
+
   await addMessage(orderId, by, reason.trim() || "Order withdrawn by customer.");
   revalidateAll();
   return { ok: true };

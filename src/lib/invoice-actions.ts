@@ -58,8 +58,19 @@ export async function createDraftInvoice(orderId: string): Promise<Result<{ id: 
 
   const order = (await getOrders()).find((o) => o.id === orderId);
   if (!order) return { ok: false, error: "Order not found." };
-  if (order.status === "pending" || order.status === "changes_requested") {
-    return { ok: false, error: "Approve the order before invoicing it." };
+
+  // Only a live order may be billed. Listing what IS allowed rather than
+  // what is not means a new status cannot quietly become invoiceable:
+  // previously only pending and sent-back were blocked, so a rejected or
+  // withdrawn order could still be invoiced to the customer.
+  if (order.status !== "approved" && order.status !== "fulfilled") {
+    const why: Record<string, string> = {
+      pending: "Approve the order before invoicing it.",
+      changes_requested: "This order is back with the customer for changes. Invoice it once they resubmit and it is approved.",
+      rejected: "This order was rejected, so there is nothing to bill.",
+      cancelled: "This order was withdrawn, so there is nothing to bill.",
+    };
+    return { ok: false, error: why[order.status] ?? "This order cannot be invoiced." };
   }
   if (order.invoices.some((i) => i.status === "draft")) {
     return { ok: false, error: "This order already has a draft invoice." };
@@ -200,6 +211,18 @@ export async function issueInvoice(invoiceId: string): Promise<Result<{ invoice_
   const invoice = await getInvoice(invoiceId);
   if (!invoice) return { ok: false, error: "Invoice not found." };
   if (invoice.status !== "draft") return { ok: false, error: "This invoice has already been issued." };
+
+  // Re-checked at issue, not just at draft: a draft can sit for days while
+  // the order is withdrawn underneath it.
+  if (invoice.order_id) {
+    const order = (await getOrders()).find((o) => o.id === invoice.order_id);
+    if (order && order.status !== "approved" && order.status !== "fulfilled") {
+      return {
+        ok: false,
+        error: `Order ${order.order_number} is ${order.status === "cancelled" ? "withdrawn" : order.status}, so this draft cannot be issued. Discard it.`,
+      };
+    }
+  }
   if (invoice.items.length === 0) return { ok: false, error: "An invoice needs at least one line." };
 
   const settings = await getCompanySettings();
