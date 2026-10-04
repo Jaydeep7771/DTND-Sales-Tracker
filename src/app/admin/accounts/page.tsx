@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { Badge, Card, PageHeading } from "@/components/ui";
 import { getCompanySettings, getTrialBalance } from "@/lib/data";
 import { requirePage } from "@/lib/guard";
@@ -57,7 +58,13 @@ export default async function AccountsPage() {
                               <tr key={a.id} className={`border-t border-border-soft ${a.is_group ? "bg-surface-soft" : ""}`}>
                                 <td className="px-5 py-2 font-mono text-[12px] text-slate whitespace-nowrap">{a.code}</td>
                                 <td className={`px-5 py-2 text-[13px] ${a.is_group ? "font-semibold" : "pl-9"}`}>
-                                  {a.name}
+                                  {/* A balance without the entries behind it is a dead end,
+                                      so every postable account links into the day book. */}
+                                  {a.is_group ? a.name : (
+                                    <Link href={`/admin/journal?account=${a.id}`} className="text-ink hover:text-navy-hover no-underline">
+                                      {a.name}
+                                    </Link>
+                                  )}
                                   {a.system_key && <span className="ml-2 font-mono text-[10px] text-muted">{a.system_key}</span>}
                                 </td>
                                 <td className="px-5 py-2 text-right font-mono text-[12.5px] text-slate-strong whitespace-nowrap">{a.total_debit ? money(a.total_debit) : ""}</td>

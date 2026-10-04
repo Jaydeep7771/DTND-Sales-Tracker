@@ -328,6 +328,109 @@ export async function getJournal(limit = 100): Promise<JournalEntryRow[]> {
   return data ?? [];
 }
 
+export interface JournalLineView {
+  account_id: string;
+  code: string;
+  name: string;
+  debit: number;
+  credit: number;
+  party_id: string | null;
+  party_name: string | null;
+  memo: string | null;
+}
+
+export interface JournalEntryView extends JournalEntryRow {
+  lines: JournalLineView[];
+  total: number;
+  /** True when some later entry reverses this one, so the UI can say so. */
+  reversed_by: string | null;
+}
+
+export interface DayBookQuery {
+  from?: string;
+  to?: string;
+  accountId?: string;
+  source?: string;
+  limit?: number;
+}
+
+/**
+ * The day book: entries with their lines, which is the only view that
+ * explains a balance. The trial balance says Rent is 450,000; this says
+ * which three payments made it so.
+ */
+export async function getDayBook(q: DayBookQuery = {}): Promise<JournalEntryView[]> {
+  await applyFormatting();
+  const [accounts, customers, staff] = await Promise.all([getAccounts(), getCustomers(), getStaff()]);
+  const accountById = new Map(accounts.map((a) => [a.id, a]));
+  const partyById = new Map([...customers, ...staff].map((u) => [u.id, u.company_name ?? u.email]));
+
+  let entries: JournalEntryRow[];
+  let lines: { entry_id: string; account_id: string; debit: number; credit: number; party_id: string | null; memo: string | null; sort_order: number }[];
+
+  if (isDemo) {
+    entries = demo.acc.entries.filter(
+      (e) => (!q.from || e.entry_date >= q.from) && (!q.to || e.entry_date <= q.to) && (!q.source || e.source_type === q.source),
+    );
+    lines = demo.acc.lines;
+  } else {
+    const supabase = await createClient();
+    let eq = supabase.from("journal_entries").select("*").order("entry_date", { ascending: false });
+    if (q.from) eq = eq.gte("entry_date", q.from);
+    if (q.to) eq = eq.lte("entry_date", q.to);
+    if (q.source) eq = eq.eq("source_type", q.source);
+    const { data: e } = await eq.limit(q.limit ?? 200);
+    entries = e ?? [];
+    const { data: l } = await supabase.from("journal_lines").select("*").in("entry_id", entries.map((x) => x.id));
+    lines = l ?? [];
+  }
+
+  // Which entries have already been reversed, so the screen can say so
+  // rather than letting someone reverse the same mistake twice.
+  const reversals = new Map<string, string>();
+  const allEntries = isDemo ? demo.acc.entries : entries;
+  for (const e of allEntries) if (e.reversal_of) reversals.set(e.reversal_of, e.entry_no);
+
+  const views = entries
+    .map((e) => {
+      const own = lines
+        .filter((l) => l.entry_id === e.id)
+        .sort((a, b) => a.sort_order - b.sort_order)
+        .map((l) => {
+          const account = accountById.get(l.account_id);
+          return {
+            account_id: l.account_id,
+            code: account?.code ?? "—",
+            name: account?.name ?? "Unknown account",
+            debit: Number(l.debit),
+            credit: Number(l.credit),
+            party_id: l.party_id,
+            party_name: l.party_id ? partyById.get(l.party_id) ?? null : null,
+            memo: l.memo,
+          };
+        });
+      return {
+        ...e,
+        lines: own,
+        total: round2(own.reduce((a, l) => a + l.debit, 0)),
+        reversed_by: reversals.get(e.id) ?? null,
+      };
+    })
+    // Filtering by account after building the lines, so the entry is still
+    // shown whole: half an entry is not a journal entry.
+    .filter((e) => !q.accountId || e.lines.some((l) => l.account_id === q.accountId))
+    .sort((a, b) => b.entry_date.localeCompare(a.entry_date) || b.posted_at.localeCompare(a.posted_at));
+
+  return views.slice(0, q.limit ?? 200);
+}
+
+/** Staff list, used to name the party on a journal line. */
+export async function getStaff(): Promise<UserProfile[]> {
+  if (isDemo) return demo.staff;
+  const { data } = await (await createClient()).from("users").select("*").neq("role", "customer");
+  return data ?? [];
+}
+
 // ---------------------------------------------------------------- invoices
 
 function buildInvoice(

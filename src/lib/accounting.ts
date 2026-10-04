@@ -47,7 +47,7 @@ export interface JournalLineInput {
 export interface JournalEntryInput {
   entry_date: string;          // ISO date
   narration: string;
-  source_type?: "invoice" | "payment" | "credit_note" | "bill" | "dispatch" | "stock" | "manual";
+  source_type?: "invoice" | "payment" | "credit_note" | "bill" | "dispatch" | "stock" | "opening" | "manual";
   source_id?: string;
   lines: JournalLineInput[];
 }

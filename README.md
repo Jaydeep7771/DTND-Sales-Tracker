@@ -49,6 +49,8 @@ when the dev server restarts.
 | `/admin/purchases` | Supplier bills, suppliers and the sales tax working |
 | `/admin/reports` | Profit and loss, balance sheet |
 | `/admin/periods` | Period close |
+| `/admin/journal` | Day book: every entry with its lines, plus manual posting |
+| `/admin/opening-balances` | One-time go-live balances |
 | `/portal` | Catalog with filter rail, 9-per-page "Load more", add to cart |
 | `/portal/checkout` | Review order, delivery details, submit (status `pending`) |
 | `/portal/orders` | Active-order timeline, order history, and the conversation: a sent-back order shows the admin's comment and proposed quantities, which the customer can accept and resubmit, reply to, or withdraw |
@@ -148,6 +150,29 @@ Both are read from journal lines carrying the customer as the party, so neither 
 `/admin/reports` gives a profit and loss and a balance sheet for the month, the fiscal year, or everything. Both are sums of journal lines rather than maintained totals, so they cannot disagree with the trial balance. Profit for the period is carried into equity as its own line, because income and expense accounts are never closed into retained earnings here.
 
 `/admin/periods` closes a month so a filed figure cannot change underneath you. Closing is enforced by the database; the demo path makes the same refusal, because a lock that only appears to work is worse than none.
+
+## Posting by hand
+
+Until now the ledger could only be written by the documents that drive it. Rent, salaries, utilities, bank charges, depreciation and drawings had nowhere to go, so half a real P&L was unreachable and the bank figure was a receipts-less-payments counter rather than a balance.
+
+`/admin/journal` is the day book: every entry with its lines, which is the screen that explains a balance. The trial balance says Rent is 450,000; this says which three payments made it so. Every postable account on the chart links into it.
+
+Two ways to post, onto the same engine:
+
+- **Record a payment** — the common case, in business language. What it was for, how much, paid from where. No debits or credits on screen; the lists are narrowed to expenses and to bank or cash so they are not needed.
+- **Journal entry** — the escape hatch, for depreciation, accruals, drawings and corrections. Any accounts, and Save stays disabled until it balances.
+
+Both run through `postEntry`, so the balance rule, period locking, gapless numbering and the append-only ledger apply without being restated. Any entry can be reversed from the day book; the reversal is dated today rather than the date of the original, because a month already reported cannot be changed.
+
+## Opening balances
+
+`/admin/opening-balances`, run once. Without it, go-live starts every balance at zero: the bank reads as activity since Tuesday and customers who owe you money owe nothing.
+
+**Customer and supplier balances are entered as individual documents, not as one figure each.** A lump is faster to type and breaks aging, statements and receipt allocation on day one, because there is nothing to age, list or allocate against. Each unpaid invoice is entered with its original number and due date, and becomes a real invoice the aged schedule can see.
+
+**The contra side is always Opening Balance Equity, never revenue or expense.** Those sales were made before go-live; recognising them now would inflate this year's profit with last year's trading. Opening invoices carry no tax for the same reason — that tax was reported before you started.
+
+The running strip at the bottom shows what is still out of balance and what will go to equity. Committing optionally closes every period up to the go-live date so nothing can slip behind the opening position; if an existing period overlaps, it says so rather than silently skipping the lock.
 
 ## Email
 
