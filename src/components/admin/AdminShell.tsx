@@ -26,6 +26,7 @@ const ICONS: Record<string, ReactNode> = {
   opening: <><path d="M12 3v12" /><path d="m8 11 4 4 4-4" /><rect x="3" y="15" width="18" height="6" rx="2" /></>,
   applications: <><path d="M6 3h8l4 4v14H6V3Z" /><path d="M14 3v4h4" /><path d="m9 13 2 2 4-4" /></>,
   staff: <><circle cx="9" cy="8" r="3.2" /><path d="M2.5 20a6.5 6.5 0 0 1 13 0" /><path d="M17 7.5v5M14.5 10h5" /></>,
+  pricing: <><path d="M3 12.5V5a2 2 0 0 1 2-2h7.5L21 11.5a2 2 0 0 1 0 2.83l-6.67 6.67a2 2 0 0 1-2.83 0L3 12.5Z" /><circle cx="8" cy="8" r="1.4" /></>,
   settings: <><circle cx="12" cy="12" r="3.2" /><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6 1.65 1.65 0 0 0 10 3.09V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9c.14.6.63 1.05 1.24 1.11H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z" /></>,
   invoices: <><path d="M6 3h9l4 4v13.5a.5.5 0 0 1-.76.43L16 19.5l-2.5 1.5L11 19.5 8.5 21 6.26 19.93A.5.5 0 0 1 6 19.5V3Z" /><path d="M14 3v4h4" /><path d="M9 11h7M9 14.5h5" /></>,
 };
@@ -44,6 +45,7 @@ const NAV: { href: string; label: string; icon: string; cap: Capability }[] = [
   { href: "/admin/inventory",  label: "Inventory",         icon: "inventory", cap: "product:read" },
   { href: "/admin/orders",     label: "Orders",            icon: "orders",    cap: "order:read" },
   { href: "/admin/customers",  label: "Customers",         icon: "customers", cap: "customer:read" },
+  { href: "/admin/pricing",    label: "Pricing",           icon: "pricing",   cap: "pricing:read" },
   { href: "/admin/applications", label: "Applications",    icon: "applications", cap: "customer:read" },
   { href: "/admin/receivables", label: "Aged debtors",     icon: "receivables", cap: "report:read" },
   { href: "/admin/accounts",   label: "Chart of accounts", icon: "ledger",    cap: "ledger:read" },

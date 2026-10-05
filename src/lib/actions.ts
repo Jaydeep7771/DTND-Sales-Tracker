@@ -11,7 +11,9 @@ import { can, isStaff, type Capability } from "@/lib/permissions";
 import type { UserRole } from "@/types/database";
 import { inviteEmail, sendEmail } from "@/lib/email";
 import { inviteExpiry, inviteUrlFor, isInviteExpired } from "@/lib/invite";
-import { isDemo, getOrder, getCustomerExposure, DEMO_CUSTOMER_COOKIE } from "@/lib/data";
+import { isDemo, getOrder, getCustomerExposure, getCart, getCurrentUser, DEMO_CUSTOMER_COOKIE } from "@/lib/data";
+import { clearCart } from "@/lib/cart-actions";
+import { stockMessage } from "@/lib/availability";
 import { adjustStock, dispatchOrder, recordOpeningStock } from "@/lib/inventory";
 import { creditCheck } from "@/lib/receivables";
 import { transitionError } from "@/lib/order-status";
@@ -88,7 +90,8 @@ export async function createProduct(input: NewProductInput): Promise<Result<{ sk
     demo.products.unshift({
       id: productId, sku, ...input, stock_quantity: 0,
       name: input.name.trim(), description: input.description.trim() || null,
-      is_archived: false, created_at: now, updated_at: now,
+      // Backorder is opt-in; a new line starts capped at real stock.
+      allow_backorder: false, is_archived: false, created_at: now, updated_at: now,
     });
   } else {
     const supabase = await createClient();
@@ -242,41 +245,57 @@ async function shortOf(items: { product_id: string; name: string; quantity: numb
   return null;
 }
 
+/**
+ * Turns the server cart into a pending order.
+ *
+ * Three things are decided here and nowhere else, because this is the
+ * last point at which they can be decided honestly:
+ *
+ *   * the price, resolved from the rate card rather than taken from the
+ *     browser, so price_at_purchase is a number we computed;
+ *   * whether the stock exists, re-checked now rather than relying on
+ *     the figure the catalogue showed a few minutes ago;
+ *   * that the cart is emptied only once the order actually exists.
+ */
 export async function submitOrder(input: SubmitOrderInput): Promise<Result<{ order_number: string; id: string }>> {
-  if (!input.lines.length) return { ok: false, error: "Your cart is empty." };
+  const user = await getCurrentUser();
+  if (!user) return { ok: false, error: "You must be signed in." };
+
+  const cart = await getCart(user.id);
+  if (!cart.lines.length) return { ok: false, error: "Your cart is empty." };
+
+  // Availability is read fresh. Between filling a cart and checking out,
+  // somebody else's order may have taken the stock.
+  if (cart.blocking.length) {
+    return {
+      ok: false,
+      error:
+        cart.blocking.length === 1
+          ? stockMessage(cart.blocking[0])
+          : `Some lines are no longer available:\n${cart.blocking.map((p) => "• " + stockMessage(p)).join("\n")}`,
+    };
+  }
 
   if (isDemo) {
-    const me = await author();
-    const customer = demo.customers.find((c) => c.id === me?.id);
-    if (!customer) return { ok: false, error: "Sign in first." };
     const n = demo.nextOrderNumber++;
     const id = newId();
     demo.orders.unshift({
       id,
       order_number: "DT-" + n,
-      customer_id: customer.id,
+      customer_id: user.id,
       status: "pending",
       delivery_address: input.delivery_address,
       required_by: input.required_by,
       note: input.note || null,
       created_at: new Date().toISOString(),
-      items: input.lines.map((l) => {
-        const p = demo.products.find((p) => p.id === l.product_id)!;
-        return { id: newId(), product_id: p.id, quantity: l.quantity, price_at_purchase: p.price };
-      }),
+      items: cart.lines.map((l) => ({ id: newId(), product_id: l.product_id, quantity: l.quantity, price_at_purchase: l.unit_price })),
     });
+    await clearCart(user.id);
     revalidateAll();
     return { ok: true, data: { order_number: "DT-" + n, id } };
   }
 
   const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
-  if (!user) return { ok: false, error: "You must be signed in." };
-
-  // Lock prices at submit time from the live catalog.
-  const ids = input.lines.map((l) => l.product_id);
-  const { data: products } = await supabase.from("products").select("id, price").in("id", ids);
-  const priceOf = new Map((products ?? []).map((p) => [p.id, p.price]));
 
   const { data: order, error } = await supabase
     .from("orders")
@@ -286,9 +305,17 @@ export async function submitOrder(input: SubmitOrderInput): Promise<Result<{ ord
   if (error || !order) return { ok: false, error: error?.message ?? "Could not create order." };
 
   const { error: itemsError } = await supabase.from("order_items").insert(
-    input.lines.map((l) => ({ order_id: order.id, product_id: l.product_id, quantity: l.quantity, price_at_purchase: priceOf.get(l.product_id) ?? 0 })),
+    // The price comes from the resolved cart line, which came from the
+    // rate card. Nothing the browser sent reaches this column.
+    cart.lines.map((l) => ({ order_id: order.id, product_id: l.product_id, quantity: l.quantity, price_at_purchase: l.unit_price })),
   );
-  if (itemsError) return { ok: false, error: itemsError.message };
+  if (itemsError) {
+    // Leave the cart alone so the buyer can retry without rebuilding it.
+    await supabase.from("orders").delete().eq("id", order.id);
+    return { ok: false, error: itemsError.message };
+  }
+
+  await clearCart(user.id);
   revalidateAll();
   return { ok: true, data: { order_number: order.order_number, id: order.id } };
 }
@@ -360,7 +387,7 @@ export async function onboardCustomer(input: { company_name: string; email: stri
 
   if (isDemo) {
     if (demo.customers.some((c) => c.email === email)) return { ok: false, error: "A customer with that email already exists." };
-    demo.customers.push({ id: newId(), email, role: "customer", company_name: company, billing_address: null, ntn: null, strn: null, is_active: true, suspended_at: null, suspended_by: null, suspend_reason: null, invite_expires_at: expires, invited_by: null, credit_limit: 0, credit_hold: false, payment_terms_days: null, invite_token: token, invited_at: now, activated_at: null, created_at: now });
+    demo.customers.push({ id: newId(), email, role: "customer", company_name: company, billing_address: null, ntn: null, strn: null, is_active: true, suspended_at: null, suspended_by: null, suspend_reason: null, invite_expires_at: expires, invited_by: null, credit_limit: 0, credit_hold: false, payment_terms_days: null, invite_token: token, invited_at: now, activated_at: null, price_list_id: null, created_at: now });
   } else {
     const admin = createAdminClient();
     const { data: created, error } = await admin.auth.admin.createUser({

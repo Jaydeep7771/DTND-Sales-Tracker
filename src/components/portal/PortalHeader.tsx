@@ -76,7 +76,18 @@ export default function PortalHeader({ company, account, topOffset, demo, action
                   <div className="hatch w-12 h-12 shrink-0 rounded-[7px]" />
                   <div className="min-w-0 flex-1">
                     <div className="text-[13px] font-semibold">{l.name}</div>
-                    <div className="font-mono text-[11px] text-slate mt-[3px]">{l.sku} · {money(l.unit_price)} / unit</div>
+                    <div className="font-mono text-[11px] text-slate mt-[3px]">
+                      {l.sku} · {money(l.unit_price)} / unit
+                      {/* Strike list price only when they actually beat it. */}
+                      {l.unit_price < l.list_price && <span className="ml-1.5 line-through text-muted">{money(l.list_price)}</span>}
+                    </div>
+                    {l.quantity > l.available && (
+                      <div className={`text-[11px] mt-1 ${l.allow_backorder ? "text-warning" : "text-danger"}`}>
+                        {l.allow_backorder
+                          ? `${Math.max(0, l.available)} in stock, the rest ships on restock`
+                          : `Only ${Math.max(0, l.available)} available`}
+                      </div>
+                    )}
                     <div className="flex items-center gap-2 mt-1.5">
                       <div className="flex items-center border border-border rounded-[6px] overflow-hidden">
                         <button type="button" aria-label="Decrease" onClick={() => (l.quantity <= 1 ? cart.remove(l.product_id) : cart.setQty(l.product_id, l.quantity - 1))} className="border-0 bg-surface-soft w-7 h-7 cursor-pointer text-sm">–</button>
@@ -86,16 +97,27 @@ export default function PortalHeader({ company, account, topOffset, demo, action
                       <button type="button" onClick={() => cart.remove(l.product_id)} className="text-[11px] text-slate bg-transparent border-0 p-0 cursor-pointer hover:text-danger">Remove</button>
                     </div>
                   </div>
-                  <div className="font-mono text-[13px] font-semibold">{money(l.unit_price * l.quantity)}</div>
+                  <div className="font-mono text-[13px] font-semibold">{money(l.line_total)}</div>
                 </div>
               ))}
             </div>
             <div className="px-[18px] py-4 border-t border-border flex flex-col gap-[11px] bg-surface-softer">
+              {cart.saving > 0 && (
+                <div className="flex justify-between text-[12px] text-success">
+                  <span>Your {cart.cart.tier ?? "account"} rate saves</span>
+                  <span className="font-mono">{money(cart.saving)}</span>
+                </div>
+              )}
+              {cart.cart.blocking.length > 0 && (
+                <div className="rounded-lg bg-danger-bg border border-danger-bd px-3 py-2 text-[12px] text-danger">
+                  {cart.cart.blocking.length} line{cart.cart.blocking.length === 1 ? "" : "s"} exceed available stock. Reduce {cart.cart.blocking.length === 1 ? "it" : "them"} to continue.
+                </div>
+              )}
               <div className="flex justify-between items-baseline">
                 <span className="text-[13px] text-slate-strong">Estimated total</span>
                 <span className="font-mono text-xl font-semibold">{money(cart.total)}</span>
               </div>
-              <Button size="lg" disabled={cart.lines.length === 0} onClick={() => { cart.setOpen(false); router.push("/portal/checkout"); }}>Review &amp; submit order</Button>
+              <Button size="lg" disabled={cart.lines.length === 0 || cart.cart.blocking.length > 0} onClick={() => { cart.setOpen(false); router.push("/portal/checkout"); }}>Review &amp; submit order</Button>
             </div>
           </div>
         </div>

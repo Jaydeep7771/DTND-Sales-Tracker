@@ -4,7 +4,7 @@ export type UserRole = "admin" | "finance" | "customer";
 export type OrderStatus = "pending" | "changes_requested" | "approved" | "rejected" | "fulfilled" | "cancelled";
 export type AnnouncementType = "announcement" | "faq";
 
-type UsersRow = { id: string; email: string; role: UserRole; company_name: string | null; billing_address: string | null; ntn: string | null; strn: string | null; is_active: boolean; suspended_at: string | null; suspended_by: string | null; suspend_reason: string | null; invite_expires_at: string | null; invited_by: string | null; credit_limit: number; credit_hold: boolean; payment_terms_days: number | null; invite_token: string | null; invited_at: string | null; activated_at: string | null; created_at: string };
+type UsersRow = { id: string; email: string; role: UserRole; company_name: string | null; billing_address: string | null; ntn: string | null; strn: string | null; is_active: boolean; suspended_at: string | null; suspended_by: string | null; suspend_reason: string | null; invite_expires_at: string | null; invited_by: string | null; credit_limit: number; credit_hold: boolean; payment_terms_days: number | null; invite_token: string | null; invited_at: string | null; activated_at: string | null; price_list_id: string | null; created_at: string };
 type OrderMessagesRow = { id: string; order_id: string; author_id: string; author_role: UserRole; body: string; created_at: string };
 type ProductsRow = {
   id: string;
@@ -18,6 +18,7 @@ type ProductsRow = {
   image_url: string | null;
   stock_quantity: number;
   reorder_point: number;
+  allow_backorder: boolean;         // may be ordered beyond available stock
   is_archived: boolean;
   created_at: string;
   updated_at: string;
@@ -167,7 +168,7 @@ export interface Database {
       order_messages: { Row: OrderMessagesRow; Insert: Optional<OrderMessagesRow, "id" | "created_at">; Update: Partial<OrderMessagesRow>; Relationships: [] };
       products: {
         Row: ProductsRow;
-        Insert: Optional<ProductsRow, "id" | "description" | "category" | "unit_of_measure" | "image_url" | "stock_quantity" | "reorder_point" | "is_archived" | "created_at" | "updated_at">;
+        Insert: Optional<ProductsRow, "id" | "description" | "category" | "unit_of_measure" | "image_url" | "stock_quantity" | "reorder_point" | "allow_backorder" | "is_archived" | "created_at" | "updated_at">;
         Update: Partial<ProductsRow>;
         Relationships: [];
       };
@@ -178,6 +179,9 @@ export interface Database {
         Relationships: [];
       };
       order_items: { Row: OrderItemsRow; Insert: Optional<OrderItemsRow, "id">; Update: Partial<OrderItemsRow>; Relationships: [] };
+      price_lists: { Row: PriceListsRow; Insert: Optional<PriceListsRow, "id" | "description" | "is_default" | "is_active" | "created_at">; Update: Partial<PriceListsRow>; Relationships: [] };
+      price_rules: { Row: PriceRulesRow; Insert: Optional<PriceRulesRow, "id" | "price_list_id" | "customer_id" | "min_quantity" | "valid_from" | "valid_to" | "note" | "created_by" | "created_at">; Update: Partial<PriceRulesRow>; Relationships: [] };
+      cart_items:  { Row: CartItemsRow;  Insert: Optional<CartItemsRow, "id" | "added_at" | "updated_at">; Update: Partial<CartItemsRow>; Relationships: [] };
       announcements: {
         Row: AnnouncementsRow;
         Insert: Optional<AnnouncementsRow, "id" | "type" | "priority" | "expires_at" | "is_active" | "created_at">;
@@ -185,7 +189,10 @@ export interface Database {
         Relationships: [];
       };
     };
-    Views: Record<string, never>;
+    Views: {
+      // Free stock per product. Read-only by construction.
+      product_availability: { Row: { product_id: string; on_hand: number; committed: number; available: number }; Relationships: [] };
+    };
     Functions: {
       is_admin: { Args: Record<string, never>; Returns: boolean };
       is_staff: { Args: Record<string, never>; Returns: boolean };
@@ -199,6 +206,26 @@ export interface Database {
     CompositeTypes: Record<string, never>;
   };
 }
+
+type PriceListsRow = { id: string; name: string; description: string | null; is_default: boolean; is_active: boolean; created_at: string };
+type PriceRulesRow = {
+  id: string;
+  price_list_id: string | null;     // exactly one of these two is set
+  customer_id: string | null;
+  product_id: string;
+  min_quantity: number;             // volume break; 1 means "from the first unit"
+  unit_price: number;
+  valid_from: string | null;
+  valid_to: string | null;
+  note: string | null;
+  created_by: string | null;
+  created_at: string;
+};
+type CartItemsRow = { id: string; customer_id: string; product_id: string; quantity: number; added_at: string; updated_at: string };
+
+export type PriceList = PriceListsRow;
+export type PriceRule = PriceRulesRow;
+export type CartItem = CartItemsRow;
 
 export type Product = ProductsRow;
 export type Order = OrdersRow;

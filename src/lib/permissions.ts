@@ -13,6 +13,7 @@ export type Capability =
   | "product:read" | "product:write"
   | "customer:read" | "customer:write" | "customer:billing"
   | "cms:write"
+  | "pricing:read" | "pricing:write"
   | "invoice:read" | "invoice:write"
   | "payment:write"
   | "ledger:read" | "ledger:post"
@@ -22,6 +23,9 @@ export type Capability =
 
 const FINANCE: Capability[] = [
   "order:read", "product:read", "customer:read", "customer:billing",
+  // Finance sees the rate card because it has to answer "why was this
+  // invoiced at that price", but agreeing a price is a commercial act.
+  "pricing:read",
   "invoice:read", "invoice:write", "payment:write",
   "ledger:read", "ledger:post", "report:read", "settings:finance",
 ];
@@ -30,6 +34,7 @@ export const CAPABILITIES: Record<UserRole, readonly Capability[]> = {
   admin: [
     "order:read", "order:write", "product:read", "product:write",
     "customer:read", "customer:write", "customer:billing", "cms:write",
+    "pricing:read", "pricing:write",
     "invoice:read", "invoice:write", "payment:write",
     "ledger:read", "ledger:post", "report:read",
     "settings:finance", "staff:invite",

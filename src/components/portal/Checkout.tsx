@@ -24,9 +24,11 @@ export default function Checkout() {
   function submit() {
     setError(null);
     start(async () => {
-      const res = await submitOrder({ lines: cart.lines.map((l) => ({ product_id: l.product_id, quantity: l.quantity })), delivery_address: address, required_by: requiredBy || null, note });
+      // No lines are sent: the server cart is the order. That is what
+      // makes price_at_purchase a number we resolved rather than one the
+      // browser offered.
+      const res = await submitOrder({ delivery_address: address, required_by: requiredBy || null, note });
       if (!res.ok) return setError(res.error);
-      cart.clear();
       router.push(`/portal/orders?submitted=${res.data!.order_number}`);
     });
   }
@@ -36,7 +38,7 @@ export default function Checkout() {
       <div className="min-w-0 flex flex-col gap-3.5">
         <div>
           <h1 className="text-2xl font-semibold tracking-[-.01em]">Review order</h1>
-          <div className="text-[13px] text-slate mt-1">Prices lock for 48 hours once the order is submitted for approval.</div>
+          <div className="text-[13px] text-slate mt-1">Prices come from your account’s rate card and are locked onto the order at submit.</div>
         </div>
         <Card className="overflow-hidden">
           {cart.lines.length === 0 && <div className="p-6 text-[13px] text-slate">Your cart is empty. <Link href="/portal">Back to the catalog</Link>.</div>}
@@ -45,14 +47,30 @@ export default function Checkout() {
               <div className="hatch w-14 h-14 shrink-0 rounded-lg" />
               <div className="min-w-0 flex-1">
                 <div className="text-[13.5px] font-semibold">{l.name}</div>
-                <div className="font-mono text-[11px] text-slate mt-[3px]">{l.sku} · {money(l.unit_price)} / unit</div>
+                <div className="font-mono text-[11px] text-slate mt-[3px]">
+                  {l.sku} · {money(l.unit_price)} / unit
+                  {l.unit_price < l.list_price && <span className="ml-1.5 line-through text-muted">{money(l.list_price)}</span>}
+                  {l.price_source !== "list" && (
+                    <span className="ml-1.5 text-success">
+                      {l.price_source === "contract" ? "contract" : (l.price_source_name ?? "trade") + " rate"}
+                      {l.break_quantity ? ` · ${num(l.break_quantity)}+` : ""}
+                    </span>
+                  )}
+                </div>
+                {l.quantity > l.available && (
+                  <div className={`text-[11px] mt-1 ${l.allow_backorder ? "text-warning" : "text-danger"}`}>
+                    {l.allow_backorder
+                      ? `${Math.max(0, l.available)} in stock now · the remaining ${num(l.quantity - Math.max(0, l.available))} ships on restock`
+                      : `Only ${Math.max(0, l.available)} available — reduce this line to continue`}
+                  </div>
+                )}
               </div>
               <div className="flex items-center border border-border rounded-[7px] overflow-hidden">
                 <button type="button" onClick={() => cart.setQty(l.product_id, l.quantity - 1)} className="border-0 bg-surface-soft w-7 h-8 cursor-pointer">–</button>
                 <input value={l.quantity} onChange={(e) => cart.setQty(l.product_id, Number(e.target.value) || 1)} className="w-[38px] border-0 text-center font-mono text-[13px] outline-none" />
                 <button type="button" onClick={() => cart.setQty(l.product_id, l.quantity + 1)} className="border-0 bg-surface-soft w-7 h-8 cursor-pointer">+</button>
               </div>
-              <span className="font-mono text-sm font-semibold min-w-[92px] text-right">{money(l.unit_price * l.quantity)}</span>
+              <span className="font-mono text-sm font-semibold min-w-[92px] text-right">{money(l.line_total)}</span>
               <button type="button" onClick={() => cart.remove(l.product_id)} aria-label="Remove" className="text-slate border-0 bg-transparent cursor-pointer text-base hover:text-danger">×</button>
             </div>
           ))}
@@ -84,6 +102,12 @@ export default function Checkout() {
           ].map(([k, v]) => (
             <div key={k} className="flex justify-between text-[13px] text-slate-strong"><span>{k}</span><span className="font-mono text-ink">{v}</span></div>
           ))}
+          {cart.saving > 0 && (
+            <div className="flex justify-between text-[13px] text-success">
+              <span>Saved against list{cart.cart.tier ? ` · ${cart.cart.tier}` : ""}</span>
+              <span className="font-mono">{money(cart.saving)}</span>
+            </div>
+          )}
         </div>
         <div className="h-px bg-border" />
         <div className="flex justify-between items-baseline">
@@ -91,8 +115,18 @@ export default function Checkout() {
           <span className="font-mono text-[22px] font-semibold">{money(cart.total)}</span>
         </div>
         <div className="bg-info-bg border border-info-bd rounded-lg p-[11px] text-xs text-info">Submitted orders are reviewed by an operations admin, usually within 2 business hours.</div>
-        {error && <div className="rounded-lg bg-danger-bg border border-danger-bd px-3 py-2 text-[13px] text-danger">{error}</div>}
-        <Button size="lg" onClick={submit} disabled={busy || cart.lines.length === 0}>{busy ? "Submitting…" : "Submit order to admin"}</Button>
+        {cart.cart.backorders.length > 0 && (
+          <div className="rounded-lg bg-warning-bg border border-warning-bd px-3 py-2 text-xs text-warning">
+            {cart.cart.backorders.length} line{cart.cart.backorders.length === 1 ? "" : "s"} will be backordered and ship on restock. The rest dispatches as normal.
+          </div>
+        )}
+        {cart.cart.blocking.length > 0 && (
+          <div className="rounded-lg bg-danger-bg border border-danger-bd px-3 py-2 text-xs text-danger">
+            Reduce the highlighted lines to what is available before submitting.
+          </div>
+        )}
+        {error && <div className="rounded-lg bg-danger-bg border border-danger-bd px-3 py-2 text-[13px] text-danger whitespace-pre-line">{error}</div>}
+        <Button size="lg" onClick={submit} disabled={busy || cart.lines.length === 0 || cart.cart.blocking.length > 0}>{busy ? "Submitting…" : "Submit order to admin"}</Button>
       </Card>
     </div>
   );

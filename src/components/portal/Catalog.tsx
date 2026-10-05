@@ -13,7 +13,7 @@ import { useCart } from "./CartProvider";
 import { loadCatalogPage } from "@/lib/actions";
 import { money, num, stockState } from "@/lib/format";
 import { currencyPrefix } from "@/lib/money";
-import type { CategoryCount, Product, ProductPage } from "@/lib/types";
+import type { CategoryCount, PricedProduct, ProductPage } from "@/lib/types";
 
 type Sort = "ordered" | "price" | "newest";
 
@@ -22,7 +22,7 @@ export default function Catalog({ initial, categories }: { initial: ProductPage;
   const path = usePathname();
   const params = useSearchParams();
   const [, start] = useTransition();
-  const [rows, setRows] = useState<Product[]>(initial.rows);
+  const [rows, setRows] = useState<PricedProduct[]>(initial.rows);
   const [page, setPage] = useState(initial.page);
   const [loading, setLoading] = useState(false);
   const [sort, setSort] = useState<Sort>("ordered");
@@ -54,8 +54,11 @@ export default function Catalog({ initial, categories }: { initial: ProductPage;
   }
 
   const visible = rows
-    .filter((p) => (!inStockOnly || p.stock_quantity > 0) && (!min || p.price >= Number(min)) && (!max || p.price <= Number(max)))
-    .sort((a, b) => (sort === "price" ? a.price - b.price : sort === "newest" ? b.created_at.localeCompare(a.created_at) : 0));
+    // Filter and sort on the price this customer actually pays, not on
+    // list price. Sorting a rate-carded catalogue by list price puts the
+    // cards in an order that does not match the numbers on them.
+    .filter((p) => (!inStockOnly || p.availability.available > 0) && (!min || p.pricing.unit_price >= Number(min)) && (!max || p.pricing.unit_price <= Number(max)))
+    .sort((a, b) => (sort === "price" ? a.pricing.unit_price - b.pricing.unit_price : sort === "newest" ? b.created_at.localeCompare(a.created_at) : 0));
 
   const chips = [{ name: "All", count: initial.catalogTotal }, ...categories];
   const activeFilters = (cat !== "All" ? 1 : 0) + (min || max ? 1 : 0) + (inStockOnly ? 0 : 1);
@@ -134,16 +137,31 @@ export default function Catalog({ initial, categories }: { initial: ProductPage;
   );
 }
 
-function ProductCard({ p }: { p: Product }) {
+function ProductCard({ p }: { p: PricedProduct }) {
   const cart = useCart();
   const toast = useToast();
   const [qty, setQty] = useState(1);
   const st = stockState(p.stock_quantity, p.reorder_point);
   const inCart = cart.lines.find((l) => l.product_id === p.id)?.quantity;
 
-  function add() {
-    cart.add({ product_id: p.id, name: p.name, sku: p.sku, unit_price: p.price }, qty, { open: false });
-    toast.push(`Added ${num(qty)} × ${p.name}`, "success", { label: "View cart", onClick: () => cart.setOpen(true) });
+  const available = p.availability.available;
+  // Backorder is a per-product decision now, not a side effect of
+  // nothing checking. Everything else is capped at what is free.
+  const capped = p.allow_backorder ? qty : Math.min(qty, Math.max(0, available));
+  const canOrder = p.allow_backorder || available > 0;
+
+  // The price on the card is the entry price. If buying more is cheaper,
+  // say so on the card rather than hiding it until checkout.
+  const { unit_price, list_price, source, source_name, next_break } = p.pricing;
+
+  async function add() {
+    const res = await cart.add(p.id, capped);
+    if (!res.ok) return toast.push(res.error ?? "Could not add that.", "error");
+    if (res.clamped) {
+      toast.push(`Only ${res.available} of ${p.name} available — added ${res.quantity}.`, "info", { label: "View cart", onClick: () => cart.setOpen(true) });
+    } else {
+      toast.push(`Added ${num(capped)} × ${p.name}`, "success", { label: "View cart", onClick: () => cart.setOpen(true) });
+    }
     setQty(1);
   }
 
@@ -162,21 +180,48 @@ function ProductCard({ p }: { p: Product }) {
           <div className="text-[13.5px] font-semibold leading-[1.3]">{p.name}</div>
           <div className="font-mono text-[11px] text-slate mt-[3px]">{p.sku} · {p.unit_of_measure}</div>
         </div>
-        <div className="flex items-baseline gap-1.5 mt-auto">
-          <span className="font-mono text-[17px] font-semibold">{money(p.price)}</span>
-          <span className="text-[11px] text-slate">/ unit</span>
-          {inCart && <span className="ml-auto font-mono text-[10.5px] text-success font-semibold">{num(inCart)} in cart</span>}
+
+        <div className="mt-auto flex flex-col gap-1">
+          <div className="flex items-baseline gap-1.5">
+            <span className="font-mono text-[17px] font-semibold">{money(unit_price)}</span>
+            <span className="text-[11px] text-slate">/ unit</span>
+            {unit_price < list_price && <span className="font-mono text-[11px] text-muted line-through">{money(list_price)}</span>}
+            {inCart && <span className="ml-auto font-mono text-[10.5px] text-success font-semibold">{num(inCart)} in cart</span>}
+          </div>
+
+          {source !== "list" && (
+            <span className="self-start text-[10.5px] font-semibold rounded px-1.5 py-px bg-success-bg text-success border border-success-bd">
+              {source === "contract" ? "Your contract price" : `${source_name ?? "Trade"} rate`}
+            </span>
+          )}
+          {next_break && (
+            <div className="font-mono text-[10.5px] text-slate">
+              {num(next_break.min_quantity)}+ at {money(next_break.unit_price)}
+            </div>
+          )}
+
+          {/* Free stock, not stock on hand: some of the shelf is already
+              promised to approved orders that have not shipped. */}
+          <div className="font-mono text-[10.5px] text-slate">
+            {available > 0
+              ? `${num(available)} available`
+              : p.allow_backorder ? "Out of stock · backorder" : "Out of stock"}
+          </div>
         </div>
+
         <div className="flex gap-2">
           <div className="flex items-center border border-border rounded-[7px] overflow-hidden">
             <button type="button" aria-label="Decrease quantity" onClick={() => setQty((q) => Math.max(1, q - 1))} className="border-0 bg-surface-soft text-slate-dark w-8 h-9 sm:w-7 sm:h-[34px] cursor-pointer text-sm">–</button>
             <input value={qty} aria-label="Quantity" inputMode="numeric" onChange={(e) => setQty(Math.max(1, Number(e.target.value) || 1))} className="w-[38px] border-0 text-center font-mono text-[13px] outline-none" />
             <button type="button" aria-label="Increase quantity" onClick={() => setQty((q) => q + 1)} className="border-0 bg-surface-soft text-slate-dark w-8 h-9 sm:w-7 sm:h-[34px] cursor-pointer text-sm">+</button>
           </div>
-          <Button className="flex-1 h-9 sm:h-[34px] py-0 text-[12.5px] rounded-[7px]" disabled={p.stock_quantity === 0} onClick={add}>
-            {p.stock_quantity === 0 ? "Backorder" : "Add to cart"}
+          <Button className="flex-1 h-9 sm:h-[34px] py-0 text-[12.5px] rounded-[7px]" disabled={!canOrder || cart.busy} onClick={add}>
+            {!canOrder ? "Out of stock" : p.allow_backorder && available <= 0 ? "Backorder" : "Add to cart"}
           </Button>
         </div>
+        {canOrder && !p.allow_backorder && qty > available && (
+          <div className="text-[11px] text-warning">Capped at the {num(available)} available.</div>
+        )}
       </div>
     </div>
   );

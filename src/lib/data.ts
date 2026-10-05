@@ -10,7 +10,10 @@ import { isStaff } from "@/lib/permissions";
 import { DEMO_ROLE_COOKIE } from "@/lib/demo-store";
 import type { AccountBalance } from "@/lib/accounting";
 import type { AccountRow, Bill, BillItem, BillPayment, CompanySettings, JournalEntryRow, PeriodRow, Supplier } from "@/types/database";
-import type { Product, Announcement, UserProfile, OrderView, OrderLine, OrderMessage, ProductQuery, ProductPage, CategoryCount, DashboardMetrics, OrderStatus } from "@/lib/types";
+import type { Product, Announcement, UserProfile, OrderView, OrderLine, OrderMessage, ProductQuery, ProductPage, CategoryCount, DashboardMetrics, OrderStatus, CartLine, CartView, PricedProduct } from "@/lib/types";
+import type { PriceList, PriceRule } from "@/types/database";
+import { ladderFor, lineTotal, resolvePrice, savingOn, type PriceContext } from "@/lib/pricing";
+import { availabilityOf, checkStock, type Availability } from "@/lib/availability";
 
 /** Cookie that picks which demo customer the portal acts as (set by the invite flow). */
 import { businessDate, round2, settlementOf } from "@/lib/accounting";
@@ -49,7 +52,7 @@ function buildOrder(
   };
 }
 
-function paginate(all: Product[], q: ProductQuery, catalogTotal: number): ProductPage {
+function paginate(all: PricedProduct[], q: ProductQuery, catalogTotal: number): ProductPage {
   const perPage = q.perPage ?? 9;
   const pages = Math.max(1, Math.ceil(all.length / perPage));
   const page = Math.min(Math.max(1, q.page ?? 1), pages);
@@ -62,12 +65,17 @@ export async function getProducts(q: ProductQuery = {}): Promise<ProductPage> {
   const term = (q.q ?? "").trim().toLowerCase();
   const cat = q.category && q.category !== "All" ? q.category : null;
 
+  // Price and availability are attached here rather than in the page, so
+  // every caller of getProducts sees this customer's numbers and no route
+  // can accidentally render list price to somebody on a contract.
+  const [ctx, avail] = await Promise.all([getPriceContext(), getAvailabilityMap()]);
+
   if (isDemo) {
     const active = demo.products.filter((p) => q.includeArchived || !p.is_archived);
     const rows = active.filter(
       (p) => (!cat || p.category === cat) && (!term || p.name.toLowerCase().includes(term) || p.sku.toLowerCase().includes(term)),
     );
-    return paginate(rows, q, active.length);
+    return paginate(priceProducts(rows, ctx, avail), q, active.length);
   }
 
   const supabase = await createClient();
@@ -81,7 +89,7 @@ export async function getProducts(q: ProductQuery = {}): Promise<ProductPage> {
   if (error) throw error;
   const { count: catalogTotal } = await supabase.from("products").select("id", { count: "exact", head: true }).eq("is_archived", false);
   const total = count ?? 0;
-  return { rows: data ?? [], total, catalogTotal: catalogTotal ?? 0, page, pages: Math.max(1, Math.ceil(total / perPage)) };
+  return { rows: priceProducts(data ?? [], ctx, avail), total, catalogTotal: catalogTotal ?? 0, page, pages: Math.max(1, Math.ceil(total / perPage)) };
 }
 
 export async function getCategories(): Promise<CategoryCount[]> {
@@ -921,4 +929,178 @@ export async function getSalesTaxSummary(): Promise<TaxMonth[]> {
   return [...months.values()]
     .map((m) => ({ ...m, output: round2(m.output), input: round2(m.input), net: round2(m.output - m.input) }))
     .sort((a, b) => b.month.localeCompare(a.month));
+}
+
+// ================================================================ pricing
+/**
+ * Price resolution needs three things: the rules written for this
+ * customer, the rules on their tier, and today's date. Gathering them is
+ * one round trip per request thanks to cache(), so the catalogue can
+ * price every card without going back to the database per product.
+ */
+export const getPriceContext = cache(async (customerId?: string | null): Promise<PriceContext> => {
+  const on = businessDate();
+  const id = customerId ?? (await getCurrentUser())?.id ?? null;
+
+  const lists = await getPriceLists();
+  const defaultList = lists.find((l) => l.is_default && l.is_active) ?? null;
+
+  let listId = defaultList?.id ?? null;
+  if (id) {
+    const me = isDemo
+      ? [...demo.customers, ...demo.staff].find((c) => c.id === id) ?? null
+      : (await (await createClient()).from("users").select("price_list_id").eq("id", id).maybeSingle()).data;
+    // An inactive tier falls back to the default rather than to nothing,
+    // so retiring a price list cannot silently put somebody on list price
+    // without anyone noticing.
+    const chosen = me?.price_list_id ? lists.find((l) => l.id === me.price_list_id && l.is_active) : null;
+    listId = chosen?.id ?? defaultList?.id ?? null;
+  }
+
+  const [customerRules, listRules] = await Promise.all([
+    id ? getPriceRules({ customerId: id }) : Promise.resolve([]),
+    listId ? getPriceRules({ priceListId: listId }) : Promise.resolve([]),
+  ]);
+
+  return { customerRules, listRules, listName: lists.find((l) => l.id === listId)?.name, on };
+});
+
+export async function getPriceLists(): Promise<PriceList[]> {
+  if (isDemo) return [...(demo.priceLists ?? [])];
+  const { data } = await (await createClient())
+    .from("price_lists").select("*").order("is_default", { ascending: false }).order("name");
+  return data ?? [];
+}
+
+export async function getPriceRules(opts: { customerId?: string; priceListId?: string; productId?: string } = {}): Promise<PriceRule[]> {
+  if (isDemo) {
+    return (demo.priceRules ?? []).filter(
+      (r) =>
+        (!opts.customerId || r.customer_id === opts.customerId) &&
+        (!opts.priceListId || r.price_list_id === opts.priceListId) &&
+        (!opts.productId || r.product_id === opts.productId),
+    );
+  }
+  let q = (await createClient()).from("price_rules").select("*");
+  if (opts.customerId) q = q.eq("customer_id", opts.customerId);
+  if (opts.priceListId) q = q.eq("price_list_id", opts.priceListId);
+  if (opts.productId) q = q.eq("product_id", opts.productId);
+  const { data } = await q.order("min_quantity");
+  return data ?? [];
+}
+
+// =========================================================== availability
+/**
+ * Free stock per product: on hand, less what approved orders have
+ * already promised. Fetched for the whole catalogue in one query — it is
+ * one small aggregate and the alternative is a query per card.
+ */
+export const getAvailabilityMap = cache(async (): Promise<Map<string, Availability>> => {
+  const map = new Map<string, Availability>();
+
+  if (isDemo) {
+    const committed = new Map<string, number>();
+    for (const o of demo.orders) {
+      if (o.status !== "approved") continue;
+      for (const it of o.items) committed.set(it.product_id, (committed.get(it.product_id) ?? 0) + it.quantity);
+    }
+    for (const p of demo.products) {
+      const c = committed.get(p.id) ?? 0;
+      map.set(p.id, { product_id: p.id, on_hand: p.stock_quantity, committed: c, available: p.stock_quantity - c });
+    }
+    return map;
+  }
+
+  const { data } = await (await createClient()).from("product_availability").select("*");
+  for (const row of (data ?? []) as Availability[]) map.set(row.product_id, row);
+  return map;
+});
+
+/** Attaches this customer's price and free stock to catalogue rows. */
+export function priceProducts(
+  rows: Product[],
+  ctx: PriceContext,
+  availability: Map<string, Availability>,
+): PricedProduct[] {
+  return rows.map((p) => ({
+    ...p,
+    // Quantity 1: the card shows the entry price and advertises the next
+    // break, which is what makes a volume discount do any work.
+    pricing: resolvePrice(p, 1, ctx),
+    availability: availabilityOf(availability, p.id),
+    ladder: ladderFor(p, ctx),
+  }));
+}
+
+// ================================================================== cart
+/**
+ * The cart as the server sees it.
+ *
+ * Stored rows are only product and quantity. Name, price, line total and
+ * free stock are all recomputed here on every read, which means a cart
+ * built last week cannot check out at last week's price and cannot hide
+ * that something has since sold out.
+ */
+export async function getCart(customerId?: string): Promise<CartView> {
+  await applyFormatting();
+  const id = customerId ?? (await getCurrentUser())?.id ?? null;
+  const empty: CartView = { lines: [], subtotal: 0, tax: 0, total: 0, saving: 0, blocking: [], backorders: [] };
+  if (!id) return empty;
+
+  const rows = isDemo
+    ? (demo.cart ?? []).filter((c) => c.customer_id === id)
+    : ((await (await createClient()).from("cart_items").select("*").eq("customer_id", id).order("added_at")).data ?? []);
+  if (!rows.length) return empty;
+
+  const productIds = rows.map((r) => r.product_id);
+  const products: Product[] = isDemo
+    ? demo.products.filter((p) => productIds.includes(p.id))
+    : ((await (await createClient()).from("products").select("*").in("id", productIds)).data ?? []);
+  const byId = new Map(products.map((p) => [p.id, p]));
+
+  const [ctx, avail] = await Promise.all([getPriceContext(id), getAvailabilityMap()]);
+
+  const lines: CartLine[] = [];
+  for (const row of rows) {
+    const p = byId.get(row.product_id);
+    // A product archived or deleted out from under a cart is dropped
+    // rather than rendered as a blank line.
+    if (!p || p.is_archived) continue;
+    const priced = resolvePrice(p, row.quantity, ctx);
+    lines.push({
+      product_id: p.id,
+      name: p.name,
+      sku: p.sku,
+      unit_of_measure: p.unit_of_measure,
+      quantity: row.quantity,
+      unit_price: priced.unit_price,
+      list_price: priced.list_price,
+      price_source: priced.source,
+      price_source_name: priced.source_name,
+      break_quantity: priced.break_quantity,
+      next_break: priced.next_break,
+      line_total: lineTotal(priced, row.quantity),
+      saving: savingOn(priced, row.quantity),
+      available: availabilityOf(avail, p.id).available,
+      allow_backorder: p.allow_backorder,
+    });
+  }
+
+  const { blocking, backorders } = checkStock(
+    lines.map((l) => ({ product_id: l.product_id, name: l.name, quantity: l.quantity, allow_backorder: l.allow_backorder })),
+    avail,
+  );
+
+  const subtotal = round2(lines.reduce((a, l) => a + l.line_total, 0));
+  const tax = Math.round(subtotal * taxConfig().rate);
+  return {
+    lines,
+    subtotal,
+    tax,
+    total: subtotal + tax,
+    saving: round2(lines.reduce((a, l) => a + l.saving, 0)),
+    blocking,
+    backorders,
+    tier: ctx.listName,
+  };
 }

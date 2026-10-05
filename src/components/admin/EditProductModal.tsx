@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import { Button, Field, Input, Modal } from "@/components/ui";
 import { useToast } from "@/components/ui/Toast";
 import { updateProduct } from "@/lib/actions";
+import { setAllowBackorder as setAllowBackorder_ } from "@/lib/pricing-actions";
 import type { Product } from "@/lib/types";
 import { currencyPrefix } from "@/lib/money";
 
@@ -25,6 +26,7 @@ export default function EditProductModal({ product, onClose }: { product: Produc
   const [error, setError] = useState<string | null>(null);
   const [busy, start] = useTransition();
   const set = (k: keyof typeof form) => (e: React.ChangeEvent<HTMLInputElement>) => setForm((f) => ({ ...f, [k]: e.target.value }));
+  const [allowBackorder, setAllowBackorder] = useState(product.allow_backorder);
 
   // A difference between the counted figure and the recorded one is a
   // stocktake, so the form asks why before it will post one.
@@ -45,6 +47,10 @@ export default function EditProductModal({ product, onClose }: { product: Produc
         stock_note: form.stock_note,
       });
       if (!res.ok) return setError(res.error);
+      if (allowBackorder !== product.allow_backorder) {
+        const flag = await setAllowBackorder_(product.id, allowBackorder);
+        if (!flag.ok) return setError(flag.error);
+      }
       toast.push(`${form.name.trim()} updated`, "success");
       router.refresh();
       onClose();
@@ -71,6 +77,15 @@ export default function EditProductModal({ product, onClose }: { product: Produc
         <Field label={`Unit cost (${currencyPrefix()})`}><Input mono required type="number" min="0" step="0.01" value={form.cost_price} onChange={set("cost_price")} /></Field>
         <Field label="Counted on hand"><Input mono required type="number" min="0" step="1" value={form.stock_quantity} onChange={set("stock_quantity")} /></Field>
         <Field label="Reorder point"><Input mono type="number" min="0" step="1" value={form.reorder_point} onChange={set("reorder_point")} /></Field>
+        {/* Off by default. Every line that is on is a promise somebody
+            in the warehouse has to keep. */}
+        <label className="col-span-full flex items-start gap-2 text-[13px] text-slate-dark">
+          <input type="checkbox" checked={allowBackorder} onChange={(e) => setAllowBackorder(e.target.checked)} className="accent-accent mt-[3px]" />
+          <span>
+            Allow backorders
+            <span className="block text-[12px] text-slate">Customers may order more than is free. Leave off and the cart caps at available stock.</span>
+          </span>
+        </label>
         {counted !== product.stock_quantity && (
           <div className="col-span-full rounded-lg border border-warning-bd bg-warning-bg px-3 py-2.5">
             <div className="text-[12.5px] text-warning font-medium">

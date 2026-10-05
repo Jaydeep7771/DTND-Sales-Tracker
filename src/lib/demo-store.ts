@@ -1,7 +1,7 @@
 // In-memory demo data, seeded from the design prototype. Used whenever
 // Supabase keys are not configured so the app is runnable out of the box.
 // State lives on globalThis so it survives Next.js dev HMR reloads.
-import type { StockMovement, Product, Announcement, UserProfile, OrderStatus, OrderMessage, CustomerApplication } from "@/types/database";
+import type { StockMovement, Product, Announcement, UserProfile, OrderStatus, OrderMessage, CustomerApplication, PriceList, PriceRule, CartItem } from "@/types/database";
 import { seedAccounting, type DemoAccounting } from "@/lib/demo-accounting";
 
 interface DemoOrder {
@@ -26,6 +26,9 @@ interface DemoState {
   acc: DemoAccounting;
   stock: StockMovement[];
   applications: CustomerApplication[];
+  priceLists: PriceList[];
+  priceRules: PriceRule[];
+  cart: CartItem[];
   nextOrderNumber: number;
 }
 
@@ -75,6 +78,7 @@ function seed(): DemoState {
         image_url: null,
         stock_quantity: stock,
         reorder_point: 40 + (i % 5) * 20,
+        allow_backorder: false,
         is_archived: false,
         created_at: now,
         updated_at: now,
@@ -101,12 +105,16 @@ function seed(): DemoState {
     credit_limit: [1500000, 750000, 0, 2000000, 400000, 1000000, 600000][i] ?? 0,
     credit_hold: i === 5,
     payment_terms_days: null,
-    invite_token: null, invited_at: now, activated_at: now, created_at: now,
+    invite_token: null, invited_at: now, activated_at: now,
+    // A spread of tiers so the pricing screens have something to show:
+    // two distributors, one key account, the rest on standard.
+    price_list_id: [null, uuid("pl-dist"), uuid("pl-key"), uuid("pl-dist"), null, null, null][i] ?? null,
+    created_at: now,
   }));
 
   const staff: UserProfile[] = [
-    { id: uuid("admin"), email: "rashid@dynamictraders.pk", role: "admin", company_name: "Rashid Khan", billing_address: null, ntn: null, strn: null, is_active: true, suspended_at: null, suspended_by: null, suspend_reason: null, invite_expires_at: null, invited_by: null, credit_limit: 0, credit_hold: false, payment_terms_days: null, invite_token: null, invited_at: now, activated_at: now, created_at: now },
-    { id: uuid("finance"), email: "accounts@dynamictraders.pk", role: "finance", company_name: "Nadia Aslam", billing_address: null, ntn: null, strn: null, is_active: true, suspended_at: null, suspended_by: null, suspend_reason: null, invite_expires_at: null, invited_by: null, credit_limit: 0, credit_hold: false, payment_terms_days: null, invite_token: null, invited_at: now, activated_at: now, created_at: now },
+    { id: uuid("admin"), email: "rashid@dynamictraders.pk", role: "admin", company_name: "Rashid Khan", billing_address: null, ntn: null, strn: null, is_active: true, suspended_at: null, suspended_by: null, suspend_reason: null, invite_expires_at: null, invited_by: null, credit_limit: 0, credit_hold: false, payment_terms_days: null, invite_token: null, invited_at: now, activated_at: now, price_list_id: null, created_at: now },
+    { id: uuid("finance"), email: "accounts@dynamictraders.pk", role: "finance", company_name: "Nadia Aslam", billing_address: null, ntn: null, strn: null, is_active: true, suspended_at: null, suspended_by: null, suspend_reason: null, invite_expires_at: null, invited_by: null, credit_limit: 0, credit_hold: false, payment_terms_days: null, invite_token: null, invited_at: now, activated_at: now, price_list_id: null, created_at: now },
   ];
   const byEmail = (e: string) => customers.find((c) => c.email === e)!;
 
@@ -345,11 +353,65 @@ function seed(): DemoState {
     created_at: new Date(Date.now() - 2 * 86400e3).toISOString(),
   }];
 
-  return { products, customers, orders, announcements, messages: [], staff, acc, stock, applications, nextOrderNumber: 24189 };
+  // ------------------------------------------------------------ pricing
+  // Three tiers, because a distributor and a retailer should not see the
+  // same number. Standard is the default and carries no rules at all —
+  // it simply means "pay list price".
+  const priceLists: PriceList[] = [
+    { id: uuid("pl-std"), name: "Standard", description: "List price. Applies to any customer not placed on another tier.", is_default: true, is_active: true, created_at: now },
+    { id: uuid("pl-dist"), name: "Distributor", description: "Trade accounts buying for resale.", is_default: false, is_active: true, created_at: now },
+    { id: uuid("pl-key"), name: "Key account", description: "Negotiated annual volume commitment.", is_default: false, is_active: true, created_at: now },
+  ];
+
+  const priceRules: PriceRule[] = [];
+  const rule = (
+    key: string,
+    scope: { price_list_id?: string; customer_id?: string },
+    productId: string, min: number, price: number,
+    term: { from?: string; to?: string } = {},
+  ) => priceRules.push({
+    id: uuid(key),
+    price_list_id: scope.price_list_id ?? null,
+    customer_id: scope.customer_id ?? null,
+    product_id: productId, min_quantity: min, unit_price: Math.round(price),
+    valid_from: term.from ?? null, valid_to: term.to ?? null,
+    note: null, created_by: null, created_at: now,
+  });
+
+  // Tier rates with volume breaks on the fast-moving half of the
+  // catalogue. The ladder steepens with quantity, which is the point:
+  // the discount is paid for by the order size, not given away.
+  products.forEach((p, i) => {
+    if (i % 2 === 1) return; // leave half the catalogue on list price
+    const dist = { price_list_id: uuid("pl-dist") };
+    const key = { price_list_id: uuid("pl-key") };
+    rule(`r-d1-${i}`, dist, p.id, 1, p.price * 0.94);
+    rule(`r-d2-${i}`, dist, p.id, 100, p.price * 0.9);
+    rule(`r-d3-${i}`, dist, p.id, 500, p.price * 0.86);
+    rule(`r-k1-${i}`, key, p.id, 1, p.price * 0.9);
+    rule(`r-k2-${i}`, key, p.id, 250, p.price * 0.83);
+  });
+
+  // One negotiated contract, so the most-specific-wins path is exercised
+  // and not just the tier path. It runs to the end of the fiscal year.
+  const contractCustomer = byEmail("imran@meezanhw.pk");
+  const yearEnd = `${new Date().getFullYear() + (new Date().getMonth() >= 6 ? 1 : 0)}-06-30`;
+  [bySku("FAS-0140"), bySku("FAS-0177"), bySku("PKG-0362")].forEach((p, i) => {
+    rule(`r-c1-${i}`, { customer_id: contractCustomer.id }, p.id, 1, p.price * 0.82, { to: yearEnd });
+  });
+
+  // Backorder is opt-in. A handful of lines we genuinely restock to
+  // order; everything else is capped at what is free.
+  products.forEach((p, i) => { p.allow_backorder = i % 9 === 0; });
+
+  return {
+    products, customers, orders, announcements, messages: [], staff, acc, stock, applications,
+    priceLists, priceRules, cart: [], nextOrderNumber: 24189,
+  };
 }
 
 // Bump when DemoState changes shape so HMR-preserved state is reseeded.
-const DEMO_VERSION = 14; // withholding receivable account added
+const DEMO_VERSION = 15; // price lists, price rules and a server-side cart
 const g = globalThis as unknown as { __dtndDemo?: DemoState; __dtndDemoVersion?: number };
 if (!g.__dtndDemo || g.__dtndDemoVersion !== DEMO_VERSION) {
   g.__dtndDemo = seed();

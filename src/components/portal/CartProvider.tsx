@@ -1,65 +1,147 @@
 "use client";
 
-// Cart lives in localStorage so it survives reloads; submit sends it to the server.
-import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
-import type { CartLine } from "@/lib/types";
-
+/**
+ * The cart, held on the server.
+ *
+ * It used to live in localStorage, which meant it did not follow the
+ * buyer from the phone in the warehouse to the laptop at the desk, and
+ * it carried its own copy of the price — so a cart left open for a week
+ * checked out at last week's number.
+ *
+ * Now the server owns it. Every mutation goes through a server action
+ * and hands back the whole recomputed cart: prices resolved from this
+ * customer's rate card, quantities capped at free stock. The client
+ * applies an optimistic quantity so the UI stays quick, then takes
+ * whatever the server says, including when the server says less.
+ */
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { addToCart, mergeLocalCart, removeFromCart, setCartQuantity, clearCart as clearCartAction } from "@/lib/cart-actions";
+import type { CartView } from "@/lib/types";
 
 interface CartCtx {
-  lines: CartLine[];
+  cart: CartView;
+  lines: CartView["lines"];
   open: boolean;
   setOpen: (v: boolean) => void;
-  add: (line: Omit<CartLine, "quantity">, qty: number, opts?: { open?: boolean }) => void;
-  setQty: (product_id: string, qty: number) => void;
-  remove: (product_id: string) => void;
-  clear: () => void;
+  /** Resolves with what the server actually allowed, so callers can say so. */
+  add: (productId: string, qty: number, opts?: { open?: boolean }) => Promise<AddOutcome>;
+  setQty: (productId: string, qty: number) => Promise<void>;
+  remove: (productId: string) => Promise<void>;
+  clear: () => Promise<void>;
+  busy: boolean;
+  error: string | null;
   subtotal: number;
   tax: number;
   total: number;
+  saving: number;
+}
+
+export interface AddOutcome {
+  ok: boolean;
+  error?: string;
+  /** Quantity actually in the cart for that product afterwards. */
+  quantity?: number;
+  /** The server reduced the request to free stock. */
+  clamped?: boolean;
+  available?: number;
 }
 
 const Ctx = createContext<CartCtx | null>(null);
-const KEY = "dtnd-cart";
 
-/**
- * taxRate is passed in rather than read from the shared config, because
- * the provider computes totals during its own render — before any child,
- * including the component that applies company settings, has run.
- */
-export function CartProvider({ children, taxRate }: { children: ReactNode; taxRate: number }) {
-  const [lines, setLines] = useState<CartLine[]>([]);
+/** The old localStorage key, kept only long enough to migrate it once. */
+const LEGACY_KEY = "dtnd-cart";
+
+const EMPTY: CartView = { lines: [], subtotal: 0, tax: 0, total: 0, saving: 0, blocking: [], backorders: [] };
+
+export function CartProvider({ children, initial }: { children: ReactNode; initial: CartView }) {
+  const [cart, setCart] = useState<CartView>(initial ?? EMPTY);
   const [open, setOpen] = useState(false);
-  const [hydrated, setHydrated] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const merged = useRef(false);
 
-  // Server renders an empty cart; the stored cart is loaded after hydration so
-  // the markup matches. This is a genuine external-system sync (localStorage).
+  // The server is the source of truth: when a navigation re-renders the
+  // layout with a fresher cart, take it. Adjusted during render rather
+  // than in an effect, so there is no frame showing the stale cart.
+  const [seen, setSeen] = useState(initial);
+  if (initial && initial !== seen) {
+    setSeen(initial);
+    setCart(initial);
+  }
+
+  /**
+   * One-time migration. A cart built before this change, or while signed
+   * out, is still sitting in localStorage; fold it into the server cart
+   * and then stop reading that key forever.
+   */
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    try { const raw = localStorage.getItem(KEY); if (raw) setLines(JSON.parse(raw)); } catch {}
-    setHydrated(true);
-  }, []);
-  useEffect(() => {
-    if (!hydrated) return;
-    try { localStorage.setItem(KEY, JSON.stringify(lines)); } catch {}
-  }, [lines, hydrated]);
+    if (merged.current) return;
+    merged.current = true;
+    let raw: string | null = null;
+    try { raw = localStorage.getItem(LEGACY_KEY); } catch { return; }
+    if (!raw) return;
 
-  const add = useCallback((line: Omit<CartLine, "quantity">, qty: number, opts: { open?: boolean } = {}) => {
-    setLines((ls) => {
-      const i = ls.findIndex((l) => l.product_id === line.product_id);
-      if (i >= 0) return ls.map((l, j) => (j === i ? { ...l, quantity: l.quantity + qty } : l));
-      return [...ls, { ...line, quantity: qty }];
-    });
-    if (opts.open !== false) setOpen(true);
-  }, []);
-  const setQty = useCallback((id: string, qty: number) => setLines((ls) => ls.map((l) => (l.product_id === id ? { ...l, quantity: Math.max(1, qty) } : l))), []);
-  const remove = useCallback((id: string) => setLines((ls) => ls.filter((l) => l.product_id !== id)), []);
-  const clear = useCallback(() => setLines([]), []);
+    let lines: { product_id: string; quantity: number }[] = [];
+    try {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        lines = parsed
+          .filter((l) => l && typeof l.product_id === "string" && Number(l.quantity) > 0)
+          .map((l) => ({ product_id: l.product_id, quantity: Number(l.quantity) }));
+      }
+    } catch { /* a corrupt blob is not worth rescuing */ }
 
-  const value = useMemo(() => {
-    const subtotal = lines.reduce((a, l) => a + l.unit_price * l.quantity, 0);
-    const tax = Math.round(subtotal * taxRate);
-    return { lines, open, setOpen, add, setQty, remove, clear, subtotal, tax, total: subtotal + tax };
-  }, [lines, open, add, setQty, remove, clear, taxRate]);
+    // Clear first either way, so a blob that cannot be merged does not
+    // get retried on every page load.
+    try { localStorage.removeItem(LEGACY_KEY); } catch {}
+    if (!lines.length) return;
+
+    void mergeLocalCart(lines).then((res) => { if (res.ok && res.data) setCart(res.data); });
+  }, []);
+
+  const add = useCallback(async (productId: string, qty: number, opts: { open?: boolean } = {}): Promise<AddOutcome> => {
+    setBusy(true); setError(null);
+    const res = await addToCart(productId, qty);
+    setBusy(false);
+    if (!res.ok) { setError(res.error); return { ok: false, error: res.error }; }
+    setCart(res.data!.cart);
+    if (opts.open) setOpen(true);
+    return {
+      ok: true,
+      quantity: res.data!.cart.lines.find((l) => l.product_id === productId)?.quantity,
+      clamped: res.data!.clamped,
+      available: res.data!.available,
+    };
+  }, []);
+
+  const setQty = useCallback(async (productId: string, qty: number) => {
+    // Optimistic: move the number now, reconcile when the server answers.
+    setCart((c) => ({ ...c, lines: c.lines.map((l) => (l.product_id === productId ? { ...l, quantity: Math.max(1, qty) } : l)) }));
+    setBusy(true); setError(null);
+    const res = await setCartQuantity(productId, qty);
+    setBusy(false);
+    if (!res.ok) return setError(res.error);
+    setCart(res.data!.cart);
+  }, []);
+
+  const remove = useCallback(async (productId: string) => {
+    setCart((c) => ({ ...c, lines: c.lines.filter((l) => l.product_id !== productId) }));
+    setBusy(true); setError(null);
+    const res = await removeFromCart(productId);
+    setBusy(false);
+    if (!res.ok) return setError(res.error);
+    setCart(res.data!.cart);
+  }, []);
+
+  const clear = useCallback(async () => {
+    setCart(EMPTY);
+    await clearCartAction();
+  }, []);
+
+  const value = useMemo<CartCtx>(() => ({
+    cart, lines: cart.lines, open, setOpen, add, setQty, remove, clear, busy, error,
+    subtotal: cart.subtotal, tax: cart.tax, total: cart.total, saving: cart.saving,
+  }), [cart, open, add, setQty, remove, clear, busy, error]);
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }
