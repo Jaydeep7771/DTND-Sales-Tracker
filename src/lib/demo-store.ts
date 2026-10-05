@@ -79,6 +79,9 @@ function seed(): DemoState {
         stock_quantity: stock,
         reorder_point: 40 + (i % 5) * 20,
         allow_backorder: false,
+        // A plausible tariff heading per category, so the tax return
+        // export has something real to group by.
+        hs_code: ["7318.1500", "3923.2100", "6116.1000", "8536.9090", "2710.1993", "3506.9100"][ci],
         is_archived: false,
         created_at: now,
         updated_at: now,
@@ -112,12 +115,16 @@ function seed(): DemoState {
     // One account billed monthly rather than per order, so the
     // consolidated run has something to pick up.
     consolidated_billing: i === 0,
+    // A spread of tax identities so the return exercises every buyer
+    // classification: registered, unregistered, and end consumer.
+    cnic: i >= 5 ? "4210112345678" : null,
+    statement_sent_at: null, statement_sent_to: null,
     created_at: now,
   }));
 
   const staff: UserProfile[] = [
-    { id: uuid("admin"), email: "rashid@dynamictraders.pk", role: "admin", company_name: "Rashid Khan", billing_address: null, ntn: null, strn: null, is_active: true, suspended_at: null, suspended_by: null, suspend_reason: null, invite_expires_at: null, invited_by: null, credit_limit: 0, credit_hold: false, payment_terms_days: null, invite_token: null, invited_at: now, activated_at: now, price_list_id: null, consolidated_billing: false, created_at: now },
-    { id: uuid("finance"), email: "accounts@dynamictraders.pk", role: "finance", company_name: "Nadia Aslam", billing_address: null, ntn: null, strn: null, is_active: true, suspended_at: null, suspended_by: null, suspend_reason: null, invite_expires_at: null, invited_by: null, credit_limit: 0, credit_hold: false, payment_terms_days: null, invite_token: null, invited_at: now, activated_at: now, price_list_id: null, consolidated_billing: false, created_at: now },
+    { id: uuid("admin"), email: "rashid@dynamictraders.pk", role: "admin", company_name: "Rashid Khan", billing_address: null, ntn: null, strn: null, is_active: true, suspended_at: null, suspended_by: null, suspend_reason: null, invite_expires_at: null, invited_by: null, credit_limit: 0, credit_hold: false, payment_terms_days: null, invite_token: null, invited_at: now, activated_at: now, price_list_id: null, consolidated_billing: false, cnic: null, statement_sent_at: null, statement_sent_to: null, created_at: now },
+    { id: uuid("finance"), email: "accounts@dynamictraders.pk", role: "finance", company_name: "Nadia Aslam", billing_address: null, ntn: null, strn: null, is_active: true, suspended_at: null, suspended_by: null, suspend_reason: null, invite_expires_at: null, invited_by: null, credit_limit: 0, credit_hold: false, payment_terms_days: null, invite_token: null, invited_at: now, activated_at: now, price_list_id: null, consolidated_billing: false, cnic: null, statement_sent_at: null, statement_sent_to: null, created_at: now },
   ];
   const byEmail = (e: string) => customers.find((c) => c.email === e)!;
 
@@ -415,7 +422,7 @@ function seed(): DemoState {
 }
 
 // Bump when DemoState changes shape so HMR-preserved state is reseeded.
-const DEMO_VERSION = 15; // price lists, price rules and a server-side cart
+const DEMO_VERSION = 16; // HS codes, buyer CNIC and statement delivery
 const g = globalThis as unknown as { __dtndDemo?: DemoState; __dtndDemoVersion?: number };
 if (!g.__dtndDemo || g.__dtndDemoVersion !== DEMO_VERSION) {
   g.__dtndDemo = seed();

@@ -177,3 +177,86 @@ Accounts, ${BRAND}`;
 
   return { to: input.to, subject, html, text };
 }
+
+/**
+ * The monthly statement.
+ *
+ * Deliberately not a demand. A statement goes out to every account,
+ * including the ones that are fully paid, and dressing it up as a chase
+ * letter is how a good customer gets annoyed. The overdue figure is
+ * stated plainly when there is one, and left out when there is not.
+ */
+export function statementEmail(input: {
+  to: string;
+  company: string;
+  from: string;
+  to_date: string;
+  closing: number;
+  due: number;
+  overdue: number;
+  currency: string;
+  senderName: string;
+  bankDetails: string | null;
+}): Email {
+  const n = (v: number) => `${input.currency} ${Math.round(v).toLocaleString("en-US")}`;
+  const d = (iso: string) => new Date(iso).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" });
+  const period = `${d(input.from)} to ${d(input.to_date)}`;
+
+  const settled = input.due <= 0.5;
+  const subject = settled
+    ? `Statement to ${d(input.to_date)} from ${BRAND} — nothing outstanding`
+    : `Statement to ${d(input.to_date)} from ${BRAND} — ${n(input.due)} outstanding`;
+
+  const overdueLine = input.overdue > 0.5
+    ? `\nOf that, ${n(input.overdue)} is past its due date.\n`
+    : "";
+
+  const text = `Hello ${input.company},
+
+Attached is your account statement for ${period}.
+
+${settled
+    ? "Your account is fully settled — thank you. Nothing is outstanding."
+    : `Balance outstanding: ${n(input.due)}.${overdueLine}`}
+
+Every invoice on this statement can also be viewed and downloaded any time by signing in to the portal.
+${input.bankDetails && !settled ? `\nPayment details:\n${input.bankDetails}\n` : ""}
+If anything does not agree with your own records, reply to this email and we will reconcile it with you.
+
+Kind regards,
+${input.senderName}
+Accounts, ${BRAND}`;
+
+  const html = `<!doctype html>
+<html><body style="margin:0;padding:0;background:#f4f6f9;font-family:'IBM Plex Sans',Helvetica,Arial,sans-serif;color:#0f1b2b">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f4f6f9;padding:32px 16px"><tr><td align="center">
+    <table role="presentation" width="560" cellpadding="0" cellspacing="0" style="max-width:560px;width:100%;background:#fff;border:1px solid #e2e8f0;border-radius:12px;overflow:hidden">
+      <tr><td style="background:#12263c;padding:20px 28px;color:#fff;font-size:15px;font-weight:600">${BRAND}
+        <div style="font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:#7e9ab8;font-weight:600;margin-top:2px">Accounts</div>
+      </td></tr>
+      <tr><td style="padding:26px 28px 6px">
+        <h1 style="margin:0 0 12px;font-size:19px;font-weight:600">Account statement</h1>
+        <p style="margin:0 0 18px;font-size:14px;line-height:1.6;color:#334155">Hello ${escape(input.company)}, your statement for ${escape(period)} is attached.</p>
+        <table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="background:${settled ? "#edf7f1" : "#f8fafc"};border-radius:8px;margin-bottom:18px">
+          <tr>
+            <td style="padding:14px 16px">
+              <div style="font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:#64748b;font-weight:600">${settled ? "Account status" : "Outstanding"}</div>
+              <div style="font-family:'IBM Plex Mono',monospace;font-size:22px;font-weight:600;margin-top:4px;color:${settled ? "#0e7a46" : "#0f1b2b"}">${settled ? "Settled" : n(input.due)}</div>
+            </td>
+            ${input.overdue > 0.5 ? `<td style="padding:14px 16px;text-align:right">
+              <div style="font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:#64748b;font-weight:600">Past due</div>
+              <div style="font-family:'IBM Plex Mono',monospace;font-size:16px;font-weight:600;margin-top:6px;color:#b42318">${n(input.overdue)}</div>
+            </td>` : ""}
+          </tr>
+        </table>
+        ${input.bankDetails && !settled ? `<div style="font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:#64748b;font-weight:600;margin-bottom:5px">Payment details</div><div style="font-family:'IBM Plex Mono',monospace;font-size:12px;line-height:1.6;color:#334155;margin-bottom:18px;white-space:pre-line">${escape(input.bankDetails)}</div>` : ""}
+        <p style="margin:0 0 6px;font-size:13.5px;line-height:1.6;color:#334155">If anything does not agree with your own records, reply to this email and we will reconcile it with you.</p>
+        <p style="margin:16px 0 0;font-size:13.5px;line-height:1.5">Kind regards,<br><strong>${escape(input.senderName)}</strong><br><span style="color:#64748b">Accounts, ${BRAND}</span></p>
+      </td></tr>
+      <tr><td style="background:#fcfdfe;border-top:1px solid #e2e8f0;padding:14px 28px;font-size:11px;color:#94a3b8">Sent to ${escape(input.to)}. The statement PDF is attached.</td></tr>
+    </table>
+  </td></tr></table>
+</body></html>`;
+
+  return { to: input.to, subject, html, text };
+}

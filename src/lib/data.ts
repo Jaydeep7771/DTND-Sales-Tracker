@@ -14,9 +14,13 @@ import type { Product, Announcement, UserProfile, OrderView, OrderLine, OrderMes
 import type { PriceList, PriceRule } from "@/types/database";
 import { ladderFor, lineTotal, resolvePrice, savingOn, type PriceContext } from "@/lib/pricing";
 import { availabilityOf, checkStock, type Availability } from "@/lib/availability";
+import { buildStatement, type Statement, type StatementSource } from "@/lib/statements";
+import { buildCashFlow, type CashEntry, type CashFlow } from "@/lib/cashflow";
+import { buildAnnexC, type AnnexCReport } from "@/lib/fbr";
+import type { ExportEntry } from "@/lib/accounting-export";
 
 /** Cookie that picks which demo customer the portal acts as (set by the invite flow). */
-import { businessDate, round2, settlementOf } from "@/lib/accounting";
+import { addDays, businessDate, round2, settlementOf } from "@/lib/accounting";
 import { buildAging, daysPastDue, type AgingRow, type AgingTotals } from "@/lib/receivables";
 import type { InvoiceView, InvoiceLineView } from "@/lib/types";
 import type { Invoice, InvoiceItem, InvoicePayment } from "@/types/database";
@@ -1212,4 +1216,280 @@ export async function getCart(customerId?: string): Promise<CartView> {
     backorders,
     tier: ctx.listName,
   };
+}
+
+// ============================================================ statements
+/**
+ * One customer's account over a period.
+ *
+ * Built from the receivable control account only. Advances sit on a
+ * liability and withholding on its own receivable, and both carry the
+ * same party id, so including every tagged line would count each entry
+ * twice. They are reported separately, which is where a buyer expects
+ * to see them.
+ */
+export async function getStatement(customerId: string, from: string, to: string): Promise<Statement | null> {
+  await applyFormatting();
+  const customer = await getCustomerById(customerId);
+  if (!customer) return null;
+
+  const accounts = await getAccounts();
+  const ar = accounts.find((a) => a.system_key === "accounts_receivable");
+  if (!ar) return null;
+
+  let rows: StatementSource[] = [];
+  if (isDemo) {
+    const entries = new Map(demo.acc.entries.map((e) => [e.id, e]));
+    rows = demo.acc.lines
+      .filter((l) => l.account_id === ar.id && l.party_id === customerId)
+      .map((l) => {
+        const e = entries.get(l.entry_id);
+        return e && {
+          id: l.id, entry_no: e.entry_no, entry_date: e.entry_date,
+          narration: l.memo ? `${e.narration} · ${l.memo}` : e.narration,
+          debit: Number(l.debit), credit: Number(l.credit),
+        };
+      })
+      .filter((x): x is StatementSource => !!x);
+  } else {
+    const { data } = await (await createClient())
+      .from("journal_lines")
+      .select("id, debit, credit, memo, entry:journal_entries(entry_no, entry_date, narration)")
+      .eq("account_id", ar.id).eq("party_id", customerId);
+    type R = { id: string; debit: number; credit: number; memo: string | null; entry: { entry_no: string; entry_date: string; narration: string } | null };
+    rows = ((data ?? []) as unknown as R[])
+      .filter((r) => r.entry)
+      .map((r) => ({
+        id: r.id, entry_no: r.entry!.entry_no, entry_date: r.entry!.entry_date,
+        narration: r.memo ? `${r.entry!.narration} · ${r.memo}` : r.entry!.narration,
+        debit: Number(r.debit), credit: Number(r.credit),
+      }));
+  }
+
+  const [invoices, advance, withheld] = await Promise.all([
+    getInvoices({ customerId }),
+    getCustomerAdvance(customerId),
+    getWithheldFrom(customerId),
+  ]);
+
+  return buildStatement({
+    rows,
+    from,
+    to,
+    advance,
+    withheld,
+    openItems: invoices
+      .filter((i) => i.status === "issued" && i.type === "tax_invoice")
+      .map((i) => ({
+        number: i.invoice_number ?? "",
+        issue_date: i.issue_date,
+        due_date: i.due_date,
+        total: i.total,
+        balance: i.balance,
+      })),
+  });
+}
+
+// ============================================================= cash flow
+/** Journal entries with their lines resolved, for the cash flow and exports. */
+const ledgerEntries = cache(async (from?: string, to?: string): Promise<CashEntry[]> => {
+  const accounts = await getAccounts();
+  const byId = new Map(accounts.map((a) => [a.id, a]));
+
+  let entries: { id: string; entry_date: string }[];
+  let lines: { entry_id: string; account_id: string; debit: number; credit: number }[];
+
+  if (isDemo) {
+    entries = demo.acc.entries;
+    lines = demo.acc.lines;
+  } else {
+    const supabase = await createClient();
+    let q = supabase.from("journal_entries").select("id, entry_date");
+    if (from) q = q.gte("entry_date", from);
+    if (to) q = q.lte("entry_date", to);
+    const { data: e } = await q;
+    entries = e ?? [];
+    const { data: l } = await supabase
+      .from("journal_lines").select("entry_id, account_id, debit, credit")
+      .in("entry_id", entries.map((x) => x.id));
+    lines = l ?? [];
+  }
+
+  const byEntry = new Map<string, CashEntry["lines"]>();
+  for (const l of lines) {
+    const a = byId.get(l.account_id);
+    if (!a) continue;
+    const list = byEntry.get(l.entry_id) ?? [];
+    list.push({
+      account_id: l.account_id, code: a.code, name: a.name, type: a.type,
+      system_key: a.system_key, debit: Number(l.debit), credit: Number(l.credit),
+    });
+    byEntry.set(l.entry_id, list);
+  }
+
+  return entries
+    .filter((e) => (!from || e.entry_date >= from) && (!to || e.entry_date <= to))
+    .map((e) => ({ entry_date: e.entry_date, lines: byEntry.get(e.id) ?? [] }));
+});
+
+export async function getCashFlow(from: string, to: string): Promise<CashFlow> {
+  await applyFormatting();
+
+  // Opening cash is everything up to the day before the window. Taken
+  // from the ledger rather than from a stored balance, so it cannot
+  // drift away from the entries that produced it.
+  const before = await getTrialBalance({ to: addDays(from, -1) });
+  const opening = before
+    .filter((b) => b.system_key === "cash" || b.system_key === "bank")
+    .reduce((a, b) => a + b.balance, 0);
+
+  const entries = await ledgerEntries(from, to);
+  return buildCashFlow({ entries, from, to, opening });
+}
+
+// ========================================================= tax return
+/** Annex-C rows for one month, with whatever would make FBR reject them. */
+export async function getAnnexC(month: string): Promise<AnnexCReport> {
+  await applyFormatting();
+  const [invoices, products, settings] = await Promise.all([
+    getInvoices(),
+    getProducts({ perPage: 10000, includeArchived: true }),
+    getCompanySettings(),
+  ]);
+
+  // HS code lives on the product, and an invoice line keeps only the sku
+  // it was issued with, so the two are matched here rather than frozen
+  // onto the document. Coding the catalogue later should fix past
+  // months' returns, not just future ones.
+  const hsBySku = new Map(products.rows.map((p) => [p.sku, p.hs_code]));
+  const customers = await getCustomers();
+  const byId = new Map(customers.map((c) => [c.id, c]));
+
+  return buildAnnexC({
+    month,
+    furtherTax: settings.further_tax_enabled,
+    invoices: invoices.map((i) => {
+      // The buyer snapshot frozen at issue is authoritative; the live
+      // customer record only fills in what was not captured then.
+      const frozen = (i.buyer ?? {}) as { name?: string; ntn?: string | null; strn?: string | null };
+      const live = byId.get(i.customer.id);
+      return {
+        invoice_number: i.invoice_number,
+        issue_date: i.issue_date,
+        type: i.type,
+        status: i.status,
+        tax_rate: i.tax_rate,
+        discount: i.discount,
+        freight: i.freight,
+        buyer: {
+          name: frozen.name || i.customer.company_name,
+          strn: frozen.strn ?? live?.strn ?? null,
+          ntn: frozen.ntn ?? live?.ntn ?? null,
+          cnic: live?.cnic ?? null,
+        },
+        items: i.items.map((l) => ({
+          sku: l.sku, name: l.name,
+          hs_code: hsBySku.get(l.sku) ?? null,
+          line_total: l.line_total,
+        })),
+      };
+    }),
+  });
+}
+
+// ============================================================== exports
+/** The journal in the shape the Tally and QuickBooks writers want. */
+export async function getExportEntries(from: string, to: string): Promise<ExportEntry[]> {
+  const book = await getDayBook({ from, to, limit: 10000 });
+  return book
+    // Oldest first: an import that posts in date order leaves a readable
+    // ledger on the other side.
+    .slice()
+    .reverse()
+    .map((e) => ({
+      entry_no: e.entry_no,
+      entry_date: e.entry_date,
+      narration: e.narration,
+      lines: e.lines.map((l) => ({
+        code: l.code,
+        name: l.name,
+        debit: Number(l.debit),
+        credit: Number(l.credit),
+        party_name: l.party_name,
+        memo: l.memo,
+      })),
+    }));
+}
+
+// ====================================================== reconciliation
+export interface ControlBreak {
+  customer_id: string;
+  company_name: string;
+  control: number;      // receivable control account for this party
+  subledger: number;    // sum of their open invoices
+  difference: number;
+}
+
+/**
+ * Does the receivable control account agree with the invoices behind it?
+ *
+ * It always should. Every invoice posts to the control account and every
+ * receipt credits it, so the two are the same facts recorded twice — and
+ * that is exactly why the check is worth running: when they disagree,
+ * something has been done to one and not the other.
+ *
+ * It earned its place. A statement built from the control account came
+ * out two million short of the invoices it was meant to explain, because
+ * receipts posted against invoices that were later voided had never been
+ * reversed. Nothing on any screen would have shown that: the aged
+ * debtors list reads the invoices, the trial balance reads the ledger,
+ * and neither compares them.
+ */
+export async function getReceivableBreaks(): Promise<ControlBreak[]> {
+  await applyFormatting();
+  const accounts = await getAccounts();
+  const ar = accounts.find((a) => a.system_key === "accounts_receivable");
+  if (!ar) return [];
+
+  const [customers, invoices] = await Promise.all([getCustomers(), getInvoices()]);
+
+  const control = new Map<string, number>();
+  if (isDemo) {
+    for (const l of demo.acc.lines) {
+      if (l.account_id !== ar.id || !l.party_id) continue;
+      control.set(l.party_id, (control.get(l.party_id) ?? 0) + Number(l.debit) - Number(l.credit));
+    }
+  } else {
+    const { data } = await (await createClient())
+      .from("journal_lines").select("party_id, debit, credit").eq("account_id", ar.id).not("party_id", "is", null);
+    for (const l of data ?? []) {
+      if (!l.party_id) continue;
+      control.set(l.party_id, (control.get(l.party_id) ?? 0) + Number(l.debit) - Number(l.credit));
+    }
+  }
+
+  const sub = new Map<string, number>();
+  for (const i of invoices) {
+    if (i.status !== "issued" || i.type !== "tax_invoice") continue;
+    sub.set(i.customer.id, (sub.get(i.customer.id) ?? 0) + i.balance);
+  }
+
+  const breaks: ControlBreak[] = [];
+  for (const c of customers) {
+    const a = round2(control.get(c.id) ?? 0);
+    const b = round2(sub.get(c.id) ?? 0);
+    // Half a unit of currency, not zero: rounding on a split allocation
+    // can leave paisa, and reporting that as a break would train people
+    // to ignore the warning.
+    if (Math.abs(a - b) < 0.5) continue;
+    breaks.push({
+      customer_id: c.id,
+      company_name: c.company_name ?? c.email,
+      control: a,
+      subledger: b,
+      difference: round2(a - b),
+    });
+  }
+
+  return breaks.sort((x, y) => Math.abs(y.difference) - Math.abs(x.difference));
 }

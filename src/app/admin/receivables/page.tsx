@@ -1,6 +1,8 @@
 import Link from "next/link";
 import { Badge, Card, PageHeading } from "@/components/ui";
-import { getAging } from "@/lib/data";
+import { getAging, getCurrentStaff, getReceivableBreaks } from "@/lib/data";
+import StatementRun from "@/components/admin/StatementRun";
+import { can } from "@/lib/permissions";
 import { requirePage } from "@/lib/guard";
 import { BUCKET_LABEL, BUCKET_ORDER, type AgeBucket } from "@/lib/receivables";
 import { money } from "@/lib/format";
@@ -16,7 +18,9 @@ const TONE: Record<AgeBucket, string> = {
 
 export default async function ReceivablesPage() {
   await requirePage("report:read");
-  const { rows, totals } = await getAging();
+  const [{ rows, totals }, me, breaks] = await Promise.all([
+    getAging(), getCurrentStaff(), getReceivableBreaks(),
+  ]);
 
   const overduePct = totals.outstanding > 0 ? Math.round((totals.overdue / totals.outstanding) * 100) : 0;
 
@@ -34,6 +38,33 @@ export default async function ReceivablesPage() {
           ) : undefined
         }
       />
+
+      {/* Silent when everything agrees. A warning that appears every day
+          is one nobody reads. */}
+      {breaks.length > 0 && (
+        <Card className="p-4 bg-danger-bg border-danger-bd">
+          <div className="text-[13px] text-danger font-semibold">
+            The receivable control account does not agree with the invoices behind it.
+          </div>
+          <div className="text-[12.5px] text-danger mt-1 leading-[1.5]">
+            Every invoice posts to the control account and every receipt credits it, so the two are
+            the same facts recorded twice. A difference means something was done to one and not the
+            other — most often a receipt left live against an invoice that was later voided.
+          </div>
+          <div className="mt-2.5 flex flex-col gap-1">
+            {breaks.map((b) => (
+              <div key={b.customer_id} className="flex justify-between items-baseline gap-4 text-[12.5px] text-danger">
+                <Link href={`/admin/customers/${b.customer_id}`} className="font-medium">{b.company_name}</Link>
+                <span className="font-mono">
+                  ledger {money(b.control)} · invoices {money(b.subledger)} · out by {money(b.difference)}
+                </span>
+              </div>
+            ))}
+          </div>
+        </Card>
+      )}
+
+      <StatementRun canSend={can(me?.role, "invoice:write")} />
 
       {/* Totals first: the question is always "how much, and how bad". */}
       <div className="grid gap-3.5" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))" }}>

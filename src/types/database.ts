@@ -4,7 +4,7 @@ export type UserRole = "admin" | "finance" | "customer";
 export type OrderStatus = "pending" | "changes_requested" | "approved" | "rejected" | "fulfilled" | "cancelled";
 export type AnnouncementType = "announcement" | "faq";
 
-type UsersRow = { id: string; email: string; role: UserRole; company_name: string | null; billing_address: string | null; ntn: string | null; strn: string | null; is_active: boolean; suspended_at: string | null; suspended_by: string | null; suspend_reason: string | null; invite_expires_at: string | null; invited_by: string | null; credit_limit: number; credit_hold: boolean; payment_terms_days: number | null; invite_token: string | null; invited_at: string | null; activated_at: string | null; price_list_id: string | null; consolidated_billing: boolean; created_at: string };
+type UsersRow = { id: string; email: string; role: UserRole; company_name: string | null; billing_address: string | null; ntn: string | null; strn: string | null; is_active: boolean; suspended_at: string | null; suspended_by: string | null; suspend_reason: string | null; invite_expires_at: string | null; invited_by: string | null; credit_limit: number; credit_hold: boolean; payment_terms_days: number | null; invite_token: string | null; invited_at: string | null; activated_at: string | null; price_list_id: string | null; consolidated_billing: boolean; cnic: string | null; statement_sent_at: string | null; statement_sent_to: string | null; created_at: string };
 type OrderMessagesRow = { id: string; order_id: string; author_id: string; author_role: UserRole; body: string; created_at: string };
 type ProductsRow = {
   id: string;
@@ -19,6 +19,7 @@ type ProductsRow = {
   stock_quantity: number;
   reorder_point: number;
   allow_backorder: boolean;         // may be ordered beyond available stock
+  hs_code: string | null;           // customs tariff heading, for the tax return
   is_archived: boolean;
   created_at: string;
   updated_at: string;
@@ -71,6 +72,7 @@ type CompanySettingsRow = {
   phone: string | null; email: string | null; ntn: string | null; strn: string | null; bank_details: string | null;
   default_tax_rate: number; default_terms_days: number; invoice_prefix: string; credit_note_prefix: string;
   proforma_prefix: string; proforma_valid_days: number;
+  further_tax_enabled: boolean; further_tax_rate: number; statement_note: string | null;
   fiscal_year_start_month: number; updated_at: string;
   // identity
   tagline: string; logo_initials: string;
@@ -174,7 +176,7 @@ export interface Database {
       order_messages: { Row: OrderMessagesRow; Insert: Optional<OrderMessagesRow, "id" | "created_at">; Update: Partial<OrderMessagesRow>; Relationships: [] };
       products: {
         Row: ProductsRow;
-        Insert: Optional<ProductsRow, "id" | "description" | "category" | "unit_of_measure" | "image_url" | "stock_quantity" | "reorder_point" | "allow_backorder" | "is_archived" | "created_at" | "updated_at">;
+        Insert: Optional<ProductsRow, "id" | "description" | "category" | "unit_of_measure" | "image_url" | "stock_quantity" | "reorder_point" | "allow_backorder" | "hs_code" | "is_archived" | "created_at" | "updated_at">;
         Update: Partial<ProductsRow>;
         Relationships: [];
       };

@@ -174,3 +174,116 @@ export function fiscalYearRange(d = new Date(), startMonth = 7): Period {
     to: new Date(Date.UTC(startYear + 1, startMonth - 1, 0)).toISOString().slice(0, 10),
   };
 }
+
+// ------------------------------------------------------- period comparison
+/**
+ * The same profit and loss twice, side by side.
+ *
+ * A single column of numbers tells you almost nothing. "Rent 450,000" is
+ * only interesting next to last month's 300,000, and a margin is only
+ * interesting as a direction. Comparison is what turns a statement into
+ * a question somebody can answer.
+ *
+ * Lines present in one period and not the other are kept with a zero on
+ * the missing side, because an expense that appeared out of nowhere is
+ * precisely the row you want to see.
+ */
+export interface ComparedLine {
+  code: string;
+  name: string;
+  current: number;
+  prior: number;
+  change: number;
+  /** Null when the prior period was zero: the growth is undefined, not infinite. */
+  changePct: number | null;
+}
+
+export interface ComparedSection {
+  title: string;
+  lines: ComparedLine[];
+  current: number;
+  prior: number;
+  change: number;
+  changePct: number | null;
+}
+
+export interface ComparedPnl {
+  current: Period;
+  prior: Period;
+  sections: ComparedSection[];
+  grossProfit: ComparedLine;
+  netProfit: ComparedLine;
+  grossMargin: { current: number; prior: number };
+}
+
+function pct(current: number, prior: number): number | null {
+  if (Math.abs(prior) < 0.005) return null;
+  return round2(((current - prior) / Math.abs(prior)) * 100);
+}
+
+function compareLine(name: string, current: number, prior: number, code = ""): ComparedLine {
+  return { code, name, current: round2(current), prior: round2(prior), change: round2(current - prior), changePct: pct(current, prior) };
+}
+
+function compareSection(a: StatementSection, b: StatementSection): ComparedSection {
+  const keys = new Map<string, { code: string; name: string }>();
+  for (const l of [...a.lines, ...b.lines]) keys.set(l.code + l.name, { code: l.code, name: l.name });
+
+  const amount = (s: StatementSection, key: string) =>
+    s.lines.find((l) => l.code + l.name === key)?.amount ?? 0;
+
+  const lines = [...keys.entries()]
+    .map(([key, { code, name }]) => compareLine(name, amount(a, key), amount(b, key), code))
+    .sort((x, y) => Math.abs(y.current) - Math.abs(x.current));
+
+  return {
+    title: a.title,
+    lines,
+    current: a.total,
+    prior: b.total,
+    change: round2(a.total - b.total),
+    changePct: pct(a.total, b.total),
+  };
+}
+
+export function comparePnl(current: ProfitAndLoss, prior: ProfitAndLoss): ComparedPnl {
+  return {
+    current: current.period,
+    prior: prior.period,
+    sections: [
+      compareSection(current.revenue, prior.revenue),
+      compareSection(current.costOfSales, prior.costOfSales),
+      compareSection(current.operatingExpenses, prior.operatingExpenses),
+      compareSection(current.otherIncome, prior.otherIncome),
+    ],
+    grossProfit: compareLine("Gross profit", current.grossProfit, prior.grossProfit),
+    netProfit: compareLine("Net profit", current.netProfit, prior.netProfit),
+    grossMargin: { current: current.grossMarginPct, prior: prior.grossMarginPct },
+  };
+}
+
+/** The period of the same length immediately before this one. */
+export function priorPeriod(p: Period): Period {
+  const from = new Date(`${p.from}T00:00:00Z`);
+  const to = new Date(`${p.to}T00:00:00Z`);
+  const days = Math.round((to.getTime() - from.getTime()) / 86400000) + 1;
+
+  // A calendar month compares against the previous calendar month, not
+  // against "the 30 days before", because 31 days of February would be
+  // nonsense and every reader expects month on month.
+  const isWholeMonth =
+    from.getUTCDate() === 1 &&
+    to.getUTCDate() === new Date(Date.UTC(to.getUTCFullYear(), to.getUTCMonth() + 1, 0)).getUTCDate();
+
+  if (isWholeMonth) {
+    const months =
+      (to.getUTCFullYear() - from.getUTCFullYear()) * 12 + (to.getUTCMonth() - from.getUTCMonth()) + 1;
+    const start = new Date(Date.UTC(from.getUTCFullYear(), from.getUTCMonth() - months, 1));
+    const end = new Date(Date.UTC(from.getUTCFullYear(), from.getUTCMonth(), 0));
+    return { from: start.toISOString().slice(0, 10), to: end.toISOString().slice(0, 10) };
+  }
+
+  const end = new Date(from.getTime() - 86400000);
+  const start = new Date(end.getTime() - (days - 1) * 86400000);
+  return { from: start.toISOString().slice(0, 10), to: end.toISOString().slice(0, 10) };
+}

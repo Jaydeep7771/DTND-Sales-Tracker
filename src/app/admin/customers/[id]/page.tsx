@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 import { Badge, Button, Card, OrderBadge } from "@/components/ui";
 import BillingDetailsCard from "@/components/admin/BillingDetailsCard";
 import BillingModeCard from "@/components/admin/BillingModeCard";
+import StatementCard from "@/components/admin/StatementCard";
 import CreditControlCard from "@/components/admin/CreditControlCard";
 import AccountAccessCard from "@/components/admin/AccountAccessCard";
 import AdvanceCard from "@/components/admin/AdvanceCard";
@@ -231,6 +232,8 @@ export default async function CustomerDetailPage({ params }: { params: Promise<{
             canEdit={canBill}
             defaultTerms={settings.default_terms_days}
           />
+
+          <StatementCard customer={customer} outstanding={stats.outstanding} canSend={canRecordPayment || canBill} />
 
           <BillingDetailsCard customer={customer} canEdit={canBill} />
 

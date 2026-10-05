@@ -20,6 +20,7 @@ export default function EditProductModal({ product, onClose }: { product: Produc
     stock_quantity: String(product.stock_quantity),
     cost_price: String(product.cost_price ?? 0),
     reorder_point: String(product.reorder_point),
+    hs_code: product.hs_code ?? "",
     is_archived: product.is_archived,
     stock_note: "",
   });
@@ -43,6 +44,7 @@ export default function EditProductModal({ product, onClose }: { product: Produc
         cost_price: Number(form.cost_price),
         stock_quantity: Number(form.stock_quantity),
         reorder_point: Number(form.reorder_point),
+        hs_code: form.hs_code,
         is_archived: form.is_archived,
         stock_note: form.stock_note,
       });
@@ -77,6 +79,9 @@ export default function EditProductModal({ product, onClose }: { product: Produc
         <Field label={`Unit cost (${currencyPrefix()})`}><Input mono required type="number" min="0" step="0.01" value={form.cost_price} onChange={set("cost_price")} /></Field>
         <Field label="Counted on hand"><Input mono required type="number" min="0" step="1" value={form.stock_quantity} onChange={set("stock_quantity")} /></Field>
         <Field label="Reorder point"><Input mono type="number" min="0" step="1" value={form.reorder_point} onChange={set("reorder_point")} /></Field>
+        {/* Without this the sales tax return cannot be filed: Annex-C
+            lists supplies by commodity classification. */}
+        <Field label="HS code"><Input mono value={form.hs_code} onChange={set("hs_code")} placeholder="7318.1500" /></Field>
         {/* Off by default. Every line that is on is a promise somebody
             in the warehouse has to keep. */}
         <label className="col-span-full flex items-start gap-2 text-[13px] text-slate-dark">

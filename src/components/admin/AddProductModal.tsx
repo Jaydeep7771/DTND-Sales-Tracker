@@ -32,7 +32,7 @@ export default function AddProductModal({ categories, demo, onClose }: { categor
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [form, setForm] = useState({ name: "", category: categories[0] ?? "General", unit_of_measure: "Each", price: "",
-    cost_price: "", stock_quantity: "", reorder_point: "40", description: "" });
+    cost_price: "", stock_quantity: "", reorder_point: "40", description: "", hs_code: "" });
 
   const set = (k: keyof typeof form) => (e: ChangeEvent<HTMLInputElement | HTMLSelectElement>) => setForm((f) => ({ ...f, [k]: e.target.value }));
 
@@ -74,6 +74,7 @@ export default function AddProductModal({ categories, demo, onClose }: { categor
         cost_price: Number(form.cost_price || 0),
         stock_quantity: Number(form.stock_quantity || 0),
         reorder_point: Number(form.reorder_point || 0),
+        hs_code: form.hs_code,
         image_url,
       });
       if (!res.ok) {
@@ -128,6 +129,12 @@ export default function AddProductModal({ categories, demo, onClose }: { categor
         </Field>
         <Field label="Reorder point">
           <Input mono type="number" min="0" step="1" value={form.reorder_point} onChange={set("reorder_point")} />
+        </Field>
+        <Field label="HS code">
+          {/* Needed for Annex-C of the sales tax return. It can be added
+              later, but adding it now saves a second pass over the
+              catalogue at filing time. */}
+          <Input mono placeholder="7318.1500" value={form.hs_code} onChange={set("hs_code")} />
         </Field>
         <Field label="Description">
           <Input placeholder="Optional" value={form.description} onChange={set("description")} />

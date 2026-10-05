@@ -19,12 +19,16 @@ export default function BillingDetailsCard({ customer, canEdit }: { customer: Us
     billing_address: customer.billing_address ?? "",
     ntn: customer.ntn ?? "",
     strn: customer.strn ?? "",
+    cnic: customer.cnic ?? "",
   });
 
   const missing = [
     !customer.billing_address && "billing address",
     !customer.ntn && "NTN",
     !customer.strn && "STRN",
+    // A buyer with neither registration nor CNIC cannot be put on the
+    // sales tax return at all, so it is worth saying out loud.
+    !customer.strn && !customer.ntn && !customer.cnic && "CNIC",
   ].filter(Boolean) as string[];
 
   function save() {
@@ -65,6 +69,13 @@ export default function BillingDetailsCard({ customer, canEdit }: { customer: Us
             <label className="flex flex-col gap-1.5">
               <span className="label">STRN</span>
               <Input mono value={form.strn} onChange={(e) => setForm((f) => ({ ...f, strn: e.target.value }))} placeholder="00-00-0000-000-00" />
+            </label>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <label className="flex flex-col gap-1.5">
+              <span className="label">CNIC</span>
+              <Input mono value={form.cnic} onChange={(e) => setForm((f) => ({ ...f, cnic: e.target.value }))} placeholder="0000000000000" />
+              <span className="text-[11px] text-slate">Only for a buyer with no STRN or NTN.</span>
             </label>
           </div>
           <div className="flex justify-end gap-2">

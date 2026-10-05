@@ -60,6 +60,7 @@ export interface NewProductInput {
   stock_quantity: number;
   reorder_point: number;
   image_url: string | null;
+  hs_code: string;
 }
 
 function nextSku(category: string, existing: string[]): string {
@@ -91,7 +92,7 @@ export async function createProduct(input: NewProductInput): Promise<Result<{ sk
       id: productId, sku, ...input, stock_quantity: 0,
       name: input.name.trim(), description: input.description.trim() || null,
       // Backorder is opt-in; a new line starts capped at real stock.
-      allow_backorder: false, is_archived: false, created_at: now, updated_at: now,
+      allow_backorder: false, hs_code: input.hs_code.trim() || null, is_archived: false, created_at: now, updated_at: now,
     });
   } else {
     const supabase = await createClient();
@@ -116,6 +117,8 @@ export async function createProduct(input: NewProductInput): Promise<Result<{ sk
 export interface UpdateProductInput {
   price: number; cost_price: number; stock_quantity: number; reorder_point: number;
   is_archived: boolean; name: string; description: string; stock_note: string;
+  /** Customs tariff heading. Required before the sales tax return can be filed. */
+  hs_code: string;
 }
 
 /**
@@ -132,10 +135,19 @@ export async function updateProduct(id: string, input: UpdateProductInput): Prom
   if (!(input.cost_price >= 0)) return { ok: false, error: "Cost must be zero or more." };
   if (!Number.isInteger(input.stock_quantity) || input.stock_quantity < 0) return { ok: false, error: "Stock must be a whole number." };
 
+  // Kept loose on purpose: Pakistan Customs headings are written with
+  // and without dots, and refusing a format would stop somebody entering
+  // what their clearing agent actually gave them.
+  const hs = input.hs_code.trim().replace(/\s+/g, "");
+  if (hs && !/^[0-9.]{4,12}$/.test(hs)) {
+    return { ok: false, error: "An HS code is digits, optionally with dots. For example 7318.1500." };
+  }
+
   const fields = {
     price: input.price, cost_price: input.cost_price, reorder_point: input.reorder_point,
     is_archived: input.is_archived, name: input.name.trim(),
     description: input.description.trim() || null,
+    hs_code: hs || null,
   };
 
   if (isDemo) {
@@ -387,7 +399,7 @@ export async function onboardCustomer(input: { company_name: string; email: stri
 
   if (isDemo) {
     if (demo.customers.some((c) => c.email === email)) return { ok: false, error: "A customer with that email already exists." };
-    demo.customers.push({ id: newId(), email, role: "customer", company_name: company, billing_address: null, ntn: null, strn: null, is_active: true, suspended_at: null, suspended_by: null, suspend_reason: null, invite_expires_at: expires, invited_by: null, credit_limit: 0, credit_hold: false, payment_terms_days: null, invite_token: token, invited_at: now, activated_at: null, price_list_id: null, consolidated_billing: false, created_at: now });
+    demo.customers.push({ id: newId(), email, role: "customer", company_name: company, billing_address: null, ntn: null, strn: null, is_active: true, suspended_at: null, suspended_by: null, suspend_reason: null, invite_expires_at: expires, invited_by: null, credit_limit: 0, credit_hold: false, payment_terms_days: null, invite_token: token, invited_at: now, activated_at: null, price_list_id: null, consolidated_billing: false, cnic: null, statement_sent_at: null, statement_sent_to: null, created_at: now });
   } else {
     const admin = createAdminClient();
     const { data: created, error } = await admin.auth.admin.createUser({
@@ -701,6 +713,8 @@ export interface CustomerBilling {
   billing_address: string;
   ntn: string;
   strn: string;
+  /** For a buyer with no STRN or NTN. The return validates this hardest. */
+  cnic: string;
 }
 
 /**
@@ -711,11 +725,19 @@ export async function updateCustomerBilling(customerId: string, input: CustomerB
   const denied = await denyUnless("customer:billing"); if (denied) return denied;
   if (!input.company_name.trim()) return { ok: false, error: "Company name is required." };
 
+  // A CNIC is thirteen digits. Stored without dashes so the return
+  // export does not have to guess which style was typed.
+  const cnic = input.cnic.replace(/\D/g, "");
+  if (cnic && cnic.length !== 13) {
+    return { ok: false, error: "A CNIC is 13 digits. Leave it blank if the buyer is registered." };
+  }
+
   const patch = {
     company_name: input.company_name.trim(),
     billing_address: input.billing_address.trim() || null,
     ntn: input.ntn.trim() || null,
     strn: input.strn.trim() || null,
+    cnic: cnic || null,
   };
 
   if (isDemo) {

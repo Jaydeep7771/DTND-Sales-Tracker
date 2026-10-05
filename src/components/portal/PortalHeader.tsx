@@ -9,7 +9,7 @@ import { Button } from "@/components/ui";
 import { useCart } from "./CartProvider";
 import { money, num } from "@/lib/format";
 
-const NAV: [string, string][] = [["/portal", "Shop"], ["/portal/orders", "Order history"], ["/portal/invoices", "Invoices"]];
+const NAV: [string, string][] = [["/portal", "Shop"], ["/portal/orders", "Order history"], ["/portal/invoices", "Invoices"], ["/portal/statement", "Statement"]];
 
 export default function PortalHeader({ company, account, topOffset, demo, actionNeeded, unpaid }: { company: string; account: string; topOffset: number; demo: boolean; actionNeeded: number; unpaid: number }) {
   const path = usePathname();

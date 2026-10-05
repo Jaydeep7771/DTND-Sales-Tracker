@@ -145,7 +145,7 @@ export async function inviteStaff(input: StaffInviteInput): Promise<Result<{ url
       id: newId(), email, role: input.role, company_name: name,
       billing_address: null, ntn: null, strn: null,
       is_active: true, suspended_at: null, suspended_by: null, suspend_reason: null,
-      invite_expires_at: expires, invited_by: by?.id ?? null, price_list_id: null, consolidated_billing: false,
+      invite_expires_at: expires, invited_by: by?.id ?? null, price_list_id: null, consolidated_billing: false, cnic: null, statement_sent_at: null, statement_sent_to: null,
       credit_limit: 0, credit_hold: false, payment_terms_days: null,
       invite_token: token, invited_at: now, activated_at: null, created_at: now,
     });
