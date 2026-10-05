@@ -23,13 +23,14 @@ when the dev server restarts.
 
 ## Go live with Supabase
 
-1. Create a Supabase project and run `supabase/schema.sql` in the SQL editor. It creates
+1. Create a Supabase project and run the SQL files **in order**: `schema.sql`, then `02-accounting.sql` through `10-hardening.sql`. The first creates
    the tables (UUID keys), enums, RLS policies, the `product-images` bucket + policies,
    the `DT-xxxxx` order-number sequence, and adds `orders` to Realtime.
 2. Copy `.env.example` to `.env.local` and fill in the URL, anon key and service-role key.
    Add a Resend key if you want welcome emails on customer onboarding.
-3. In Supabase Auth, add your first admin user with user metadata
-   `{"role": "admin", "company_name": "Dynamic Traders"}`. The trigger copies it into `public.users`.
+3. Create the first admin with `node scripts/create-admin.mjs you@yourdomain.pk "Your Name"`.
+   It goes through the Auth admin API, because an auth user needs a hashed password and an
+   identity row that a plain INSERT would not create, and emails a link to set the password.
 4. Restart `npm run dev`. Demo mode switches off automatically, `/login` guards both areas,
    and the admin dashboard receives Realtime toasts when a customer submits an order.
 
