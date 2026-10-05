@@ -109,12 +109,15 @@ function seed(): DemoState {
     // A spread of tiers so the pricing screens have something to show:
     // two distributors, one key account, the rest on standard.
     price_list_id: [null, uuid("pl-dist"), uuid("pl-key"), uuid("pl-dist"), null, null, null][i] ?? null,
+    // One account billed monthly rather than per order, so the
+    // consolidated run has something to pick up.
+    consolidated_billing: i === 0,
     created_at: now,
   }));
 
   const staff: UserProfile[] = [
-    { id: uuid("admin"), email: "rashid@dynamictraders.pk", role: "admin", company_name: "Rashid Khan", billing_address: null, ntn: null, strn: null, is_active: true, suspended_at: null, suspended_by: null, suspend_reason: null, invite_expires_at: null, invited_by: null, credit_limit: 0, credit_hold: false, payment_terms_days: null, invite_token: null, invited_at: now, activated_at: now, price_list_id: null, created_at: now },
-    { id: uuid("finance"), email: "accounts@dynamictraders.pk", role: "finance", company_name: "Nadia Aslam", billing_address: null, ntn: null, strn: null, is_active: true, suspended_at: null, suspended_by: null, suspend_reason: null, invite_expires_at: null, invited_by: null, credit_limit: 0, credit_hold: false, payment_terms_days: null, invite_token: null, invited_at: now, activated_at: now, price_list_id: null, created_at: now },
+    { id: uuid("admin"), email: "rashid@dynamictraders.pk", role: "admin", company_name: "Rashid Khan", billing_address: null, ntn: null, strn: null, is_active: true, suspended_at: null, suspended_by: null, suspend_reason: null, invite_expires_at: null, invited_by: null, credit_limit: 0, credit_hold: false, payment_terms_days: null, invite_token: null, invited_at: now, activated_at: now, price_list_id: null, consolidated_billing: false, created_at: now },
+    { id: uuid("finance"), email: "accounts@dynamictraders.pk", role: "finance", company_name: "Nadia Aslam", billing_address: null, ntn: null, strn: null, is_active: true, suspended_at: null, suspended_by: null, suspend_reason: null, invite_expires_at: null, invited_by: null, credit_limit: 0, credit_hold: false, payment_terms_days: null, invite_token: null, invited_at: now, activated_at: now, price_list_id: null, consolidated_billing: false, created_at: now },
   ];
   const byEmail = (e: string) => customers.find((c) => c.email === e)!;
 
@@ -291,6 +294,7 @@ function seed(): DemoState {
         subtotal, discount: 0, freight: 0, tax_amount: tax, total,
         issue_date: issue, due_date: due, terms_days: 30, notes: null,
         pdf_path: null, pdf_sha256: null, journal_entry_id: null, credit_note_for: null,
+        converted_from: null, valid_until: null, period_start: null, period_end: null, sent_at: null, sent_to: null,
         issued_by: null, issued_at: issue, voided_at: null, void_reason: null,
         created_by: null, created_at: issue, updated_at: issue,
       });

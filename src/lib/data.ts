@@ -151,11 +151,23 @@ export async function getOrders(opts: { customerId?: string } = {}): Promise<Ord
   ));
 }
 
-/** Attaches invoices to orders in one pass rather than per row. */
+/**
+ * Attaches invoices to orders in one pass rather than per row.
+ *
+ * Matching on order_id alone would miss a consolidated invoice, which
+ * has none — it is linked to its orders only through its lines. So the
+ * line linkage is checked as well, and that is what an order screen
+ * needs: "what has been billed against this", however it was billed.
+ */
 async function withInvoices(orders: OrderView[]): Promise<OrderView[]> {
   if (orders.length === 0) return orders;
   const invoices = await getInvoices();
-  for (const o of orders) o.invoices = invoices.filter((i) => i.order_id === o.id);
+  for (const o of orders) {
+    const mine = new Set(o.items.map((l) => l.id));
+    o.invoices = invoices.filter(
+      (i) => i.order_id === o.id || i.items.some((l) => l.order_item_id && mine.has(l.order_item_id)),
+    );
+  }
   return orders;
 }
 
@@ -234,11 +246,35 @@ export async function getCurrentStaff(): Promise<UserProfile | null> {
   return user && isStaff(user.role) ? user : null;
 }
 
+/**
+ * Company settings, or sensible defaults.
+ *
+ * A signed-out caller is refused this row by row level security and gets
+ * null back. That used to crash the formatter, which turned every
+ * unauthenticated hit on a guarded route — a PDF link opened in the
+ * wrong browser, a crawler, an expired session — into a 500 instead of
+ * the 404 the guard was about to return. Falling back keeps the failure
+ * where it belongs: in the authorization check, not in number
+ * formatting.
+ */
 export async function getCompanySettings(): Promise<CompanySettings> {
   if (isDemo) return demo.acc.settings;
-  const { data } = await (await createClient()).from("company_settings").select("*").eq("id", true).single();
-  return data as CompanySettings;
+  const { data } = await (await createClient()).from("company_settings").select("*").eq("id", true).maybeSingle();
+  return (data ?? DEFAULT_SETTINGS) as CompanySettings;
 }
+
+/**
+ * Only ever used when the real row cannot be read. Deliberately minimal:
+ * anything that renders from these is about to be refused anyway.
+ */
+const DEFAULT_SETTINGS = {
+  id: true, legal_name: "", address: "", city: "", country: "Pakistan",
+  phone: null, email: null, ntn: null, strn: null, bank_details: null,
+  default_tax_rate: 0, default_terms_days: 30,
+  invoice_prefix: "INV", credit_note_prefix: "CN",
+  proforma_prefix: "PI", proforma_valid_days: 14,
+  fiscal_year_start_month: 7, tax_label: "Sales Tax",
+} as unknown as CompanySettings;
 
 /**
  * Applies the company's currency and tax settings to the formatters.
@@ -447,6 +483,7 @@ function buildInvoice(
   payments: InvoicePayment[],
   customer: { id: string; company_name: string | null; email: string },
   orderNumber: string | null,
+  extra: { convertedTo?: string | null; orderNumbers?: string[] } = {},
 ): InvoiceView {
   const live = payments.filter((p) => !p.reversed_at);
   const paid = live.reduce((a, p) => a + Number(p.amount), 0);
@@ -483,6 +520,16 @@ function buildInvoice(
     due_date: inv.due_date,
     terms_days: inv.terms_days,
     notes: inv.notes,
+    valid_until: inv.valid_until,
+    converted_from: inv.converted_from,
+    converted_to: extra.convertedTo ?? null,
+    period_start: inv.period_start,
+    period_end: inv.period_end,
+    // A consolidated invoice belongs to no single order, so the orders it
+    // bills are read back from the lines rather than from a column.
+    order_numbers: extra.orderNumbers ?? (orderNumber ? [orderNumber] : []),
+    sent_at: inv.sent_at,
+    sent_to: inv.sent_to,
     items: lines,
     payments,
     paid,
@@ -494,21 +541,60 @@ function buildInvoice(
   };
 }
 
+/**
+ * Order numbers keyed by order_item id.
+ *
+ * A consolidated invoice has no order_id, and a proforma that was
+ * converted still needs to say which orders it covered, so "which orders
+ * does this document bill" is answered from the line linkage rather than
+ * from a column that only holds one value.
+ */
+const orderNumberByItem = cache(async (): Promise<Map<string, string>> => {
+  const map = new Map<string, string>();
+  if (isDemo) {
+    for (const o of demo.orders) for (const it of o.items) map.set(it.id, o.order_number);
+    return map;
+  }
+  const { data } = await (await createClient()).from("order_items").select("id, order:orders(order_number)");
+  for (const row of (data ?? []) as unknown as { id: string; order: { order_number: string } | null }[]) {
+    if (row.order) map.set(row.id, row.order.order_number);
+  }
+  return map;
+});
+
+function ordersBilledBy(items: InvoiceItem[], byItem: Map<string, string>, fallback: string | null): string[] {
+  const seen = new Set<string>();
+  for (const l of items) {
+    const n = l.order_item_id ? byItem.get(l.order_item_id) : null;
+    if (n) seen.add(n);
+  }
+  if (!seen.size && fallback) seen.add(fallback);
+  return [...seen].sort();
+}
+
 export async function getInvoices(opts: { customerId?: string; orderId?: string } = {}): Promise<InvoiceView[]> {
   await applyFormatting();
+  const byItem = await orderNumberByItem();
+
   if (isDemo) {
+    // Reverse of converted_from, built once rather than searched per row.
+    const convertedTo = new Map<string, string>();
+    for (const i of demo.acc.invoices) if (i.converted_from) convertedTo.set(i.converted_from, i.id);
+
     return demo.acc.invoices
       .filter((i) => (!opts.customerId || i.customer_id === opts.customerId) && (!opts.orderId || i.order_id === opts.orderId))
       .sort((a, b) => b.created_at.localeCompare(a.created_at))
       .map((i) => {
         const customer = demo.customers.find((c) => c.id === i.customer_id)!;
         const order = demo.orders.find((o) => o.id === i.order_id);
+        const items = demo.acc.invoiceItems.filter((x) => x.invoice_id === i.id);
         return buildInvoice(
           i,
-          demo.acc.invoiceItems.filter((x) => x.invoice_id === i.id),
+          items,
           demo.acc.payments.filter((p) => p.invoice_id === i.id),
           customer,
           order?.order_number ?? null,
+          { convertedTo: convertedTo.get(i.id) ?? null, orderNumbers: ordersBilledBy(items, byItem, order?.order_number ?? null) },
         );
       });
   }
@@ -528,8 +614,17 @@ export async function getInvoices(opts: { customerId?: string; orderId?: string 
     payments: InvoicePayment[];
     order: { order_number: string } | null;
   };
-  return ((data ?? []) as unknown as Row[]).map((i) =>
-    buildInvoice(i, i.items ?? [], i.payments ?? [], i.customer, i.order?.order_number ?? null),
+  const rows = (data ?? []) as unknown as Row[];
+  // Built across the fetched set. A filtered read can miss the partner
+  // row, which is why the forward link is a lookup and not a promise.
+  const convertedTo = new Map<string, string>();
+  for (const i of rows) if (i.converted_from) convertedTo.set(i.converted_from, i.id);
+
+  return rows.map((i) =>
+    buildInvoice(i, i.items ?? [], i.payments ?? [], i.customer, i.order?.order_number ?? null, {
+      convertedTo: convertedTo.get(i.id) ?? null,
+      orderNumbers: ordersBilledBy(i.items ?? [], byItem, i.order?.order_number ?? null),
+    }),
   );
 }
 
@@ -554,14 +649,25 @@ export async function getInvoice(id: string): Promise<InvoiceView | null> {
  * refused when the credit note is raised.
  */
 export async function getRemainingToInvoice(orderId: string): Promise<Map<string, number>> {
-  const documents = (await getInvoices({ orderId })).filter((i) => i.status !== "void");
+  // Scoped to the customer, not to the order. A consolidated invoice
+  // bills several orders and carries no order_id, so filtering by order
+  // would miss it entirely and the same goods could be billed twice.
+  const order = (await getOrders()).find((o) => o.id === orderId);
+  if (!order) return new Map();
+  const mine = new Set(order.items.map((l) => l.id));
+
+  const documents = (await getInvoices({ customerId: order.customer.id })).filter(
+    // A proforma is an offer. It reserves nothing, so it must not make
+    // the goods look billed and block the real invoice.
+    (i) => i.status !== "void" && i.type !== "proforma",
+  );
   const used = new Map<string, number>();
 
   for (const doc of documents) {
     // A credit note gives quantity back to the order; an invoice takes it.
     const direction = doc.type === "credit_note" ? -1 : 1;
     for (const l of doc.items) {
-      if (!l.order_item_id) continue;
+      if (!l.order_item_id || !mine.has(l.order_item_id)) continue;
       used.set(l.order_item_id, (used.get(l.order_item_id) ?? 0) + direction * l.quantity);
     }
   }
@@ -615,7 +721,7 @@ export async function getCustomerExposure(customerId: string): Promise<{
   let outstanding = 0;
   let worst = 0;
   for (const i of invoices) {
-    if (i.status !== "issued" || i.type === "credit_note" || i.balance <= 0.005) continue;
+    if (i.status !== "issued" || i.type !== "tax_invoice" || i.balance <= 0.005) continue;
     outstanding += i.balance;
     worst = Math.max(worst, daysPastDue(i.due_date));
   }
@@ -727,7 +833,7 @@ export async function getCustomerDetail(id: string): Promise<CustomerDetail | nu
 
   // Credit notes are corrections, not receivables, so they are excluded
   // from the tiles; their effect is already in each invoice's balance.
-  const live = invoices.filter((i) => i.status === "issued" && i.type !== "credit_note");
+  const live = invoices.filter((i) => i.status === "issued" && i.type === "tax_invoice");
   return {
     customer,
     orders,
@@ -917,6 +1023,9 @@ export async function getSalesTaxSummary(): Promise<TaxMonth[]> {
 
   for (const i of invoices) {
     if (i.status !== "issued" || !i.issue_date) continue;
+    // A proforma creates no output tax liability: nothing has been
+    // supplied and nothing posted, so it is not a return item.
+    if (i.type === "proforma") continue;
     // A credit note gives tax back, so it reduces output tax rather than
     // adding to it.
     bucket(i.issue_date).output += i.type === "credit_note" ? -i.tax_amount : i.tax_amount;

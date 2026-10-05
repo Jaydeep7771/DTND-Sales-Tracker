@@ -9,9 +9,9 @@ import { Button } from "@/components/ui";
 import { useCart } from "./CartProvider";
 import { money, num } from "@/lib/format";
 
-const NAV: [string, string][] = [["/portal", "Shop"], ["/portal/orders", "Order history"]];
+const NAV: [string, string][] = [["/portal", "Shop"], ["/portal/orders", "Order history"], ["/portal/invoices", "Invoices"]];
 
-export default function PortalHeader({ company, account, topOffset, demo, actionNeeded }: { company: string; account: string; topOffset: number; demo: boolean; actionNeeded: number }) {
+export default function PortalHeader({ company, account, topOffset, demo, actionNeeded, unpaid }: { company: string; account: string; topOffset: number; demo: boolean; actionNeeded: number; unpaid: number }) {
   const path = usePathname();
   const router = useRouter();
   const cart = useCart();
@@ -42,6 +42,9 @@ export default function PortalHeader({ company, account, topOffset, demo, action
                 <Link key={href} href={href} aria-current={on ? "page" : undefined} className={`rounded-[7px] px-[13px] py-2 text-[13.5px] flex items-center gap-1.5 ${on ? "bg-selected text-navy font-semibold hover:text-navy" : "text-slate-strong font-medium"}`}>
                   {label}
                   {href === "/portal/orders" && actionNeeded > 0 && <span className="font-mono text-[10.5px] bg-accent text-white rounded-full px-1.5 py-px" title="Orders needing your reply">{actionNeeded}</span>}
+                  {/* Unpaid count, not overdue: a buyer wants to see what
+                      is on their account before it goes late. */}
+                  {href === "/portal/invoices" && unpaid > 0 && <span className="font-mono text-[10.5px] bg-warning-dot text-white rounded-full px-1.5 py-px" title="Invoices awaiting payment">{unpaid}</span>}
                 </Link>
               );
             })}

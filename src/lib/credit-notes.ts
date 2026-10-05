@@ -123,7 +123,7 @@ export async function createCreditNote(input: CreditNoteInput): Promise<Result<{
       tax_amount: totals.tax_amount, total: totals.total,
       issue_date: iso, due_date: iso, terms_days: 0, notes: input.reason.trim(),
       pdf_path: null, pdf_sha256: null, journal_entry_id: posted.entryId,
-      credit_note_for: input.invoiceId,
+      credit_note_for: input.invoiceId, converted_from: null, valid_until: null, period_start: null, period_end: null, sent_at: null, sent_to: null,
       issued_by: staff?.id ?? null, issued_at: new Date().toISOString(),
       voided_at: null, void_reason: null, created_by: staff?.id ?? null,
       created_at: new Date().toISOString(), updated_at: new Date().toISOString(),

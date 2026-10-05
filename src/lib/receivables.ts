@@ -67,9 +67,10 @@ export function buildAging(
   const byCustomer = new Map<string, AgingRow>();
 
   for (const inv of invoices) {
-    // A credit note reduces a balance; it is never itself a debt, so it
-    // must not appear as one in the aged schedule.
-    if (inv.status !== "issued" || inv.type === "credit_note" || inv.balance <= 0.005) continue;
+    // Only a tax invoice is a debt. A credit note reduces a balance and
+    // is never itself owed; a proforma is an offer and creates no
+    // receivable at all, so neither belongs in the aged schedule.
+    if (inv.status !== "issued" || inv.type !== "tax_invoice" || inv.balance <= 0.005) continue;
     const c = customers.find((x) => x.id === inv.customer.id);
     const row =
       byCustomer.get(inv.customer.id) ??

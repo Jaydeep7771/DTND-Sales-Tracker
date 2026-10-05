@@ -201,10 +201,20 @@ export function InvoiceDocument({ invoice }: { invoice: InvoiceView }) {
             <PartyBlock heading="Bill to" p={buyer} s={s} compact={compact} showTaxIds={showTaxIds} />
             <View style={{ width: 150 }}>
               {[
-                ["Issue date", fmtDate(invoice.issue_date)],
-                ["Due date", fmtDate(invoice.due_date)],
-                ["Terms", `Net ${invoice.terms_days}`],
-                ["Order", invoice.order_number ?? "—"],
+                // A proforma has no due date and nothing is owed on it,
+                // so it shows its expiry instead. Printing "Net 30" on a
+                // quote invites somebody to treat it as a bill.
+                [invoice.type === "proforma" ? "Quote date" : "Issue date", fmtDate(invoice.issue_date)],
+                ...(invoice.type === "proforma"
+                  ? [["Valid until", fmtDate(invoice.valid_until)] as [string, string]]
+                  : [
+                      ["Due date", fmtDate(invoice.due_date)] as [string, string],
+                      ["Terms", `Net ${invoice.terms_days}`] as [string, string],
+                    ]),
+                ...(invoice.period_start
+                  ? [["Period", `${fmtDate(invoice.period_start)} – ${fmtDate(invoice.period_end)}`] as [string, string]]
+                  : []),
+                ["Order", invoice.order_numbers.length ? invoice.order_numbers.join(", ") : "—"],
               ].map(([k, v]) => (
                 <View key={k} style={[s.between, { paddingVertical: 2 }]}>
                   <Text style={{ color: SLATE }}>{k}</Text>

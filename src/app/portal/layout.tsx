@@ -4,7 +4,7 @@ import FormatBootstrap from "@/components/FormatBootstrap";
 import { CartProvider } from "@/components/portal/CartProvider";
 import PortalHeader from "@/components/portal/PortalHeader";
 import Banner from "@/components/portal/Banner";
-import { getAnnouncements, getCart, getCompanySettings, getCurrentUser, getOrders, isDemo } from "@/lib/data";
+import { getAnnouncements, getCart, getCompanySettings, getCurrentUser, getInvoices, getOrders, isDemo } from "@/lib/data";
 import { currencyFromSettings } from "@/lib/money";
 
 export const dynamic = "force-dynamic";
@@ -13,17 +13,19 @@ export default async function PortalLayout({ children }: { children: React.React
   const user = await getCurrentUser();
   if (!isDemo && !user) redirect("/login");
 
-  const [banners, orders, settings, cart] = await Promise.all([
+  const [banners, orders, settings, cart, invoices] = await Promise.all([
     getAnnouncements({ type: "announcement", activeOnly: true }),
     user ? getOrders({ customerId: user.id }) : Promise.resolve([]),
     getCompanySettings(),
     getCart(),
+    user ? getInvoices({ customerId: user.id }) : Promise.resolve([]),
   ]);
   const banner = banners[0];
   const topOffset = isDemo ? 37 : 0;
   const company = user?.company_name ?? user?.email ?? "Customer";
   const account = "Account #" + (user?.id.replace(/\D/g, "").slice(0, 4).padEnd(4, "0") ?? "0000");
   const actionNeeded = orders.filter((o) => o.status === "changes_requested").length;
+  const unpaid = invoices.filter((i) => i.status === "issued" && i.type === "tax_invoice" && i.balance > 0.005).length;
 
   return (
     <>
@@ -35,7 +37,7 @@ export default async function PortalLayout({ children }: { children: React.React
       <CartProvider initial={cart}>
       {isDemo && <ScreenSwitcher />}
       <div className="flex-1 flex flex-col bg-canvas-portal">
-        <PortalHeader company={company} account={account} topOffset={topOffset} demo={isDemo} actionNeeded={actionNeeded} />
+        <PortalHeader company={company} account={account} topOffset={topOffset} demo={isDemo} actionNeeded={actionNeeded} unpaid={unpaid} />
         {banner && <Banner announcement={banner} />}
         <main className="max-w-[1280px] w-full mx-auto px-4 sm:px-5 pt-4 sm:pt-[22px] pb-12">{children}</main>
       </div>

@@ -4,7 +4,7 @@ export type UserRole = "admin" | "finance" | "customer";
 export type OrderStatus = "pending" | "changes_requested" | "approved" | "rejected" | "fulfilled" | "cancelled";
 export type AnnouncementType = "announcement" | "faq";
 
-type UsersRow = { id: string; email: string; role: UserRole; company_name: string | null; billing_address: string | null; ntn: string | null; strn: string | null; is_active: boolean; suspended_at: string | null; suspended_by: string | null; suspend_reason: string | null; invite_expires_at: string | null; invited_by: string | null; credit_limit: number; credit_hold: boolean; payment_terms_days: number | null; invite_token: string | null; invited_at: string | null; activated_at: string | null; price_list_id: string | null; created_at: string };
+type UsersRow = { id: string; email: string; role: UserRole; company_name: string | null; billing_address: string | null; ntn: string | null; strn: string | null; is_active: boolean; suspended_at: string | null; suspended_by: string | null; suspend_reason: string | null; invite_expires_at: string | null; invited_by: string | null; credit_limit: number; credit_hold: boolean; payment_terms_days: number | null; invite_token: string | null; invited_at: string | null; activated_at: string | null; price_list_id: string | null; consolidated_billing: boolean; created_at: string };
 type OrderMessagesRow = { id: string; order_id: string; author_id: string; author_role: UserRole; body: string; created_at: string };
 type ProductsRow = {
   id: string;
@@ -56,6 +56,11 @@ type InvoicesRow = {
   tax_rate: number; subtotal: number; discount: number; freight: number; tax_amount: number; total: number;
   issue_date: string | null; due_date: string | null; terms_days: number; notes: string | null;
   pdf_path: string | null; pdf_sha256: string | null; journal_entry_id: string | null; credit_note_for: string | null;
+  converted_from: string | null;    // proforma this tax invoice came from
+  valid_until: string | null;       // proforma expiry
+  period_start: string | null;      // consolidated invoice period
+  period_end: string | null;
+  sent_at: string | null; sent_to: string | null;
   issued_by: string | null; issued_at: string | null; voided_at: string | null; void_reason: string | null;
   created_by: string | null; created_at: string; updated_at: string;
 };
@@ -65,6 +70,7 @@ type CompanySettingsRow = {
   id: boolean; legal_name: string; address: string; city: string; country: string;
   phone: string | null; email: string | null; ntn: string | null; strn: string | null; bank_details: string | null;
   default_tax_rate: number; default_terms_days: number; invoice_prefix: string; credit_note_prefix: string;
+  proforma_prefix: string; proforma_valid_days: number;
   fiscal_year_start_month: number; updated_at: string;
   // identity
   tagline: string; logo_initials: string;
@@ -154,7 +160,7 @@ export interface Database {
       accounts:           { Row: AccountsRow;        Insert: Optional<AccountsRow, "id" | "parent_id" | "system_key" | "is_group" | "is_active" | "created_at">; Update: Partial<AccountsRow>; Relationships: [] };
       journal_entries:    { Row: JournalEntriesRow;  Insert: Optional<JournalEntriesRow, "id" | "source_type" | "source_id" | "reversal_of" | "posted_by" | "posted_at">; Update: Partial<JournalEntriesRow>; Relationships: [] };
       journal_lines:      { Row: JournalLinesRow;    Insert: Optional<JournalLinesRow, "id" | "debit" | "credit" | "party_id" | "memo" | "sort_order">; Update: Partial<JournalLinesRow>; Relationships: [] };
-      invoices:           { Row: InvoicesRow;        Insert: Optional<InvoicesRow, "id" | "invoice_number" | "type" | "status" | "order_id" | "seller" | "buyer" | "currency" | "subtotal" | "discount" | "freight" | "tax_amount" | "total" | "issue_date" | "due_date" | "terms_days" | "notes" | "pdf_path" | "pdf_sha256" | "journal_entry_id" | "credit_note_for" | "issued_by" | "issued_at" | "voided_at" | "void_reason" | "created_by" | "created_at" | "updated_at">; Update: Partial<InvoicesRow>; Relationships: [] };
+      invoices:           { Row: InvoicesRow;        Insert: Optional<InvoicesRow, "id" | "invoice_number" | "type" | "status" | "order_id" | "seller" | "buyer" | "currency" | "subtotal" | "discount" | "freight" | "tax_amount" | "total" | "issue_date" | "due_date" | "terms_days" | "notes" | "pdf_path" | "pdf_sha256" | "journal_entry_id" | "credit_note_for" | "converted_from" | "valid_until" | "period_start" | "period_end" | "sent_at" | "sent_to" | "issued_by" | "issued_at" | "voided_at" | "void_reason" | "created_by" | "created_at" | "updated_at">; Update: Partial<InvoicesRow>; Relationships: [] };
       invoice_items:      { Row: InvoiceItemsRow;    Insert: Optional<InvoiceItemsRow, "id" | "order_item_id" | "unit_of_measure" | "sort_order">; Update: Partial<InvoiceItemsRow>; Relationships: [] };
       invoice_payments:   { Row: InvoicePaymentsRow; Insert: Optional<InvoicePaymentsRow, "id" | "paid_on" | "method" | "reference" | "note" | "journal_entry_id" | "recorded_by" | "reversed_at" | "reversal_reason" | "reversed_by" | "created_at">; Update: Partial<InvoicePaymentsRow>; Relationships: [] };
       company_settings:   { Row: CompanySettingsRow; Insert: Partial<CompanySettingsRow>; Update: Partial<CompanySettingsRow>; Relationships: [] };

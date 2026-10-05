@@ -7,8 +7,8 @@ import { useRouter } from "next/navigation";
 import { Badge, Button, Input, Modal, Textarea } from "@/components/ui";
 import { useToast } from "@/components/ui/Toast";
 import {
-  createDraftInvoice, discardDraftInvoice, issueAndSendInvoice,
-  sendInvoice, updateDraftInvoice, voidInvoice,
+  convertProforma, createDraftInvoice, discardDraftInvoice, issueAndSendInvoice,
+  issueInvoice, sendInvoice, updateDraftInvoice, voidInvoice,
 } from "@/lib/invoice-actions";
 import RecordReceiptModal from "./RecordReceiptModal";
 import CreditNoteModal from "./CreditNoteModal";
@@ -30,12 +30,16 @@ export default function InvoicePanel({ order, canInvoice, canRecordPayment }: { 
   const draft = order.invoices.find((i) => i.status === "draft");
   const issued = order.invoices.filter((i) => i.status !== "draft");
   const billable = order.status === "approved" || order.status === "fulfilled";
+  // A quote is still open while it is issued, unexpired and unconverted.
+  const openQuote = order.invoices.some(
+    (i) => i.type === "proforma" && i.status === "issued" && !i.converted_to,
+  );
 
-  function raise() {
+  function raise(type: "tax_invoice" | "proforma") {
     start(async () => {
-      const res = await createDraftInvoice(order.id);
+      const res = await createDraftInvoice(order.id, type);
       if (!res.ok) return toast.push(res.error, "error");
-      toast.push("Draft invoice created", "success");
+      toast.push(type === "proforma" ? "Draft proforma created" : "Draft invoice created", "success");
       router.refresh();
     });
   }
@@ -55,7 +59,14 @@ export default function InvoicePanel({ order, canInvoice, canRecordPayment }: { 
               : "The order has to be approved before it can be invoiced."}
           </div>
           {canInvoice && billable && (
-            <div className="mt-4"><Button onClick={raise} disabled={busy}>{busy ? "Creating…" : "Raise invoice"}</Button></div>
+            <div className="mt-4 flex gap-2 justify-center flex-wrap">
+              <Button onClick={() => raise("tax_invoice")} disabled={busy}>{busy ? "Creating…" : "Raise invoice"}</Button>
+              {/* A proforma quotes a firm number without booking a sale.
+                  Useful for a new account that pays before you ship. */}
+              {!openQuote && (
+                <Button variant="secondary" onClick={() => raise("proforma")} disabled={busy}>Raise proforma</Button>
+              )}
+            </div>
           )}
         </div>
       )}
@@ -80,6 +91,7 @@ function DraftEditor({ invoice, canInvoice }: { invoice: InvoiceView; canInvoice
   const [freight, setFreight] = useState(invoice.freight);
   const [terms, setTerms] = useState(invoice.terms_days);
   const [notes, setNotes] = useState(invoice.notes ?? "");
+  const isProforma = invoice.type === "proforma";
 
   // Live totals so the figure never lags the inputs.
   const lines = invoice.items.map((l) => ({ ...l, quantity: qty[l.id] ?? l.quantity })).filter((l) => l.quantity > 0);
@@ -99,6 +111,14 @@ function DraftEditor({ invoice, canInvoice }: { invoice: InvoiceView; canInvoice
     start(async () => {
       const saved = await updateDraftInvoice(invoice.id, patch);
       if (!saved.ok) return toast.push(saved.error, "error");
+      // A proforma is issued but not emailed from here: it usually goes
+      // out with a covering note, so the operator sends it deliberately.
+      if (isProforma) {
+        const quoted = await issueInvoice(invoice.id);
+        if (!quoted.ok) return toast.push(quoted.error, "error");
+        toast.push(`${quoted.data!.invoice_number} issued as a quote. Nothing posted to the ledger.`, "success");
+        return router.refresh();
+      }
       const res = await issueAndSendInvoice(invoice.id);
       if (!res.ok) return toast.push(res.error, "error");
       const d = res.data!;
@@ -123,9 +143,12 @@ function DraftEditor({ invoice, canInvoice }: { invoice: InvoiceView; canInvoice
     <div className="border border-border rounded-[10px] overflow-hidden">
       <div className="px-4 py-3 bg-warning-bg border-b border-warning-bd flex items-center justify-between gap-3 flex-wrap">
         <div className="text-[12.5px] text-warning">
-          <strong className="font-semibold">Draft.</strong> Nothing is numbered or posted to the ledger until you issue it.
+          <strong className="font-semibold">Draft {isProforma ? "proforma" : "invoice"}.</strong>{" "}
+          {isProforma
+            ? "A proforma is a firm quote. It takes its own number series and posts nothing to the ledger, now or when you issue it."
+            : "Nothing is numbered or posted to the ledger until you issue it."}
         </div>
-        <Badge tone="warning">Draft</Badge>
+        <Badge tone="warning">{isProforma ? "Draft quote" : "Draft"}</Badge>
       </div>
 
       <div className="overflow-x-auto">
@@ -177,7 +200,7 @@ function DraftEditor({ invoice, canInvoice }: { invoice: InvoiceView; canInvoice
               <Input mono type="number" min="0" step="1" disabled={!canInvoice} value={freight} onChange={(e) => setFreight(Math.max(0, Number(e.target.value) || 0))} />
             </label>
             <label className="flex flex-col gap-1.5">
-              <span className="label">Terms (days)</span>
+              <span className="label">{isProforma ? "Terms on conversion" : "Terms (days)"}</span>
               <Input mono type="number" min="0" step="1" disabled={!canInvoice} value={terms} onChange={(e) => setTerms(Math.max(0, Number(e.target.value) || 0))} />
             </label>
           </div>
@@ -209,7 +232,9 @@ function DraftEditor({ invoice, canInvoice }: { invoice: InvoiceView; canInvoice
           <Button variant="destructive" onClick={discard} disabled={busy}>Discard</Button>
           <Button variant="secondary" onClick={() => save(() => toast.push("Draft saved", "success"))} disabled={busy}>Save draft</Button>
           <Button variant="secondary" onClick={() => save(() => window.open(`/api/invoices/${invoice.id}/pdf`, "_blank"))} disabled={busy}>Preview PDF</Button>
-          <Button onClick={issueAndSend} disabled={busy || lines.length === 0}>{busy ? "Working…" : "Issue & email"}</Button>
+          <Button onClick={issueAndSend} disabled={busy || lines.length === 0}>
+            {busy ? "Working…" : isProforma ? "Issue quote" : "Issue & email"}
+          </Button>
         </div>
       )}
     </div>
@@ -225,8 +250,21 @@ function IssuedInvoice({ invoice, canInvoice, canRecordPayment }: { invoice: Inv
   const [paying, setPaying] = useState(false);
   const [crediting, setCrediting] = useState<Record<string, number> | null>(null);
   const isCredit = invoice.type === "credit_note";
-  const unpaid = invoice.status === "issued" && !isCredit && invoice.balance > 0.005;
+  const isProforma = invoice.type === "proforma";
+  // Only a tax invoice is money owed. A quote is not, so it must not
+  // offer "record payment" or a credit note against it.
+  const unpaid = invoice.status === "issued" && invoice.type === "tax_invoice" && invoice.balance > 0.005;
+  const expired = isProforma && !!invoice.valid_until && invoice.valid_until < new Date().toISOString().slice(0, 10);
   const [reason, setReason] = useState("");
+
+  function convert() {
+    start(async () => {
+      const res = await convertProforma(invoice.id);
+      if (!res.ok) return toast.push(res.error, "error");
+      toast.push("Draft tax invoice raised from this quote. Check it, then issue.", "success");
+      router.refresh();
+    });
+  }
 
   function openCredit() {
     start(async () => {
@@ -251,13 +289,16 @@ function IssuedInvoice({ invoice, canInvoice, canRecordPayment }: { invoice: Inv
         <div>
           <div className="flex items-center gap-2.5">
             <span className="font-mono text-[14px] font-semibold">{invoice.invoice_number}</span>
-            {isCredit
-              ? <Badge tone="info">Credit note</Badge>
-              : <Badge tone={TONE[invoice.settlement]}>{SETTLEMENT_LABEL[invoice.settlement]}</Badge>}
+            {isCredit && <Badge tone="info">Credit note</Badge>}
+            {isProforma && <Badge tone="info">Proforma</Badge>}
+            {isProforma && invoice.converted_to && <Badge tone="success">Converted</Badge>}
+            {isProforma && !invoice.converted_to && expired && <Badge tone="danger">Expired</Badge>}
+            {!isCredit && !isProforma && <Badge tone={TONE[invoice.settlement]}>{SETTLEMENT_LABEL[invoice.settlement]}</Badge>}
           </div>
           <div className="text-[11.5px] text-slate mt-1">
             Issued {invoice.issued_at ? shortDateTime(invoice.issued_at) : "—"}
-            {!isCredit && invoice.due_date && invoice.settlement !== "void" && <> · due {shortDate(invoice.due_date)}</>}
+            {!isCredit && !isProforma && invoice.due_date && invoice.settlement !== "void" && <> · due {shortDate(invoice.due_date)}</>}
+            {isProforma && invoice.valid_until && <> · {expired ? "expired" : "valid until"} {shortDate(invoice.valid_until)}</>}
             {" · "}{num(invoice.items.length)} line{invoice.items.length === 1 ? "" : "s"}
           </div>
         </div>
@@ -265,9 +306,11 @@ function IssuedInvoice({ invoice, canInvoice, canRecordPayment }: { invoice: Inv
           <div className={`font-mono text-[18px] font-semibold ${isCredit ? "text-success" : ""}`}>
             {isCredit ? "−" : ""}{money(invoice.total)}
           </div>
-          {isCredit
-            ? <div className="text-[11.5px] text-slate">applied to the customer&apos;s balance</div>
-            : invoice.paid > 0 && <div className="text-[11.5px] text-slate">paid {money(invoice.paid)} · balance {money(invoice.balance)}</div>}
+          {isCredit && <div className="text-[11.5px] text-slate">applied to the customer&apos;s balance</div>}
+          {isProforma && <div className="text-[11.5px] text-slate">quoted · nothing posted</div>}
+          {!isCredit && !isProforma && invoice.paid > 0 && (
+            <div className="text-[11.5px] text-slate">paid {money(invoice.paid)} · balance {money(invoice.balance)}</div>
+          )}
         </div>
       </div>
       <div className="px-4 py-2.5 border-t border-border bg-surface-softer flex gap-2 flex-wrap justify-end">
@@ -277,7 +320,16 @@ function IssuedInvoice({ invoice, canInvoice, canRecordPayment }: { invoice: Inv
         {canRecordPayment && unpaid && (
           <Button size="sm" onClick={() => setPaying(true)}>Record payment</Button>
         )}
-        {canInvoice && invoice.status === "issued" && !isCredit && (
+        {canInvoice && invoice.status === "issued" && isProforma && !invoice.converted_to && (
+          <>
+            <Button variant="secondary" size="sm" onClick={resend} disabled={busy}>{busy ? "Sending…" : "Email quote"}</Button>
+            <Button size="sm" onClick={convert} disabled={busy || expired}>
+              {expired ? "Expired — requote" : "Customer accepted · raise invoice"}
+            </Button>
+            <Button variant="destructive" size="sm" onClick={() => setVoiding(true)} disabled={busy}>Withdraw</Button>
+          </>
+        )}
+        {canInvoice && invoice.status === "issued" && !isCredit && !isProforma && (
           <>
             <Button variant="secondary" size="sm" onClick={resend} disabled={busy}>{busy ? "Sending…" : "Email again"}</Button>
             {/* Credit note is the correction once money has moved; void is

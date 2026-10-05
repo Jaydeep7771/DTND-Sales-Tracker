@@ -164,6 +164,21 @@ export interface InvoiceView {
   due_date: string | null;
   terms_days: number;
   notes: string | null;
+
+  /** Proforma only: after this the quote should be redone, not honoured. */
+  valid_until: string | null;
+  /** On a tax invoice, the proforma it was raised from. */
+  converted_from: string | null;
+  /** On a proforma, the tax invoice it became. Derived, never stored. */
+  converted_to: string | null;
+  /** Consolidated invoice: the period billed. */
+  period_start: string | null;
+  period_end: string | null;
+  /** Every order this document bills, derived from the line linkage. */
+  order_numbers: string[];
+  sent_at: string | null;
+  sent_to: string | null;
+
   items: InvoiceLineView[];
   payments: InvoicePaymentT[];
   paid: number;

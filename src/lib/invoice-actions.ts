@@ -8,7 +8,7 @@
 import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
 import { demo, newId } from "@/lib/demo-store";
-import { isDemo, getCompanySettings, getCurrentStaff, getCustomerAdvance, getCustomerById, getInvoice, getInvoices, getOrders, getRemainingToInvoice } from "@/lib/data";
+import { isDemo, getCompanySettings, getCurrentStaff, getCustomerAdvance, getCustomerById, getCustomers, getInvoice, getInvoices, getOrders, getRemainingToInvoice } from "@/lib/data";
 import { can } from "@/lib/permissions";
 import { addDays, businessDate, computeInvoiceTotals, round2, type PaymentMethod } from "@/lib/accounting";
 import { fiscalYearLabel, nextDocumentNumber, postEntry, reverseEntry } from "@/lib/ledger";
@@ -53,7 +53,10 @@ async function deny(capability: Parameters<typeof can>[1]): Promise<Result | nul
  * Raises a draft against an approved order, prefilled with whatever is
  * still uninvoiced so a part shipment can be billed now and the rest later.
  */
-export async function createDraftInvoice(orderId: string): Promise<Result<{ id: string }>> {
+export async function createDraftInvoice(
+  orderId: string,
+  type: "tax_invoice" | "proforma" = "tax_invoice",
+): Promise<Result<{ id: string }>> {
   const denied = await deny("invoice:write"); if (denied) return denied;
 
   const order = (await getOrders()).find((o) => o.id === orderId);
@@ -72,8 +75,8 @@ export async function createDraftInvoice(orderId: string): Promise<Result<{ id: 
     };
     return { ok: false, error: why[order.status] ?? "This order cannot be invoiced." };
   }
-  if (order.invoices.some((i) => i.status === "draft")) {
-    return { ok: false, error: "This order already has a draft invoice." };
+  if (order.invoices.some((i) => i.status === "draft" && i.type === type)) {
+    return { ok: false, error: `This order already has a draft ${type === "proforma" ? "proforma" : "invoice"}.` };
   }
 
   const used = await getRemainingToInvoice(orderId);
@@ -92,12 +95,14 @@ export async function createDraftInvoice(orderId: string): Promise<Result<{ id: 
   if (isDemo) {
     const id = newId();
     demo.acc.invoices.unshift({
-      id, invoice_number: null, type: "tax_invoice", status: "draft",
+      id, invoice_number: null, type, status: "draft",
       order_id: orderId, customer_id: order.customer.id,
       seller: {}, buyer: {}, currency: settings.currency_code, tax_rate: taxRate,
       subtotal: totals.subtotal, discount: 0, freight: 0, tax_amount: totals.tax_amount, total: totals.total,
       issue_date: null, due_date: null, terms_days: settings.default_terms_days, notes: settings.invoice_default_notes,
       pdf_path: null, pdf_sha256: null, journal_entry_id: null, credit_note_for: null,
+      converted_from: null, valid_until: null, period_start: null, period_end: null,
+      sent_at: null, sent_to: null,
       issued_by: null, issued_at: null, voided_at: null, void_reason: null,
       created_by: null, created_at: now, updated_at: now,
     });
@@ -115,7 +120,7 @@ export async function createDraftInvoice(orderId: string): Promise<Result<{ id: 
 
   const supabase = await createClient();
   const { data: inv, error } = await supabase.from("invoices").insert({
-    order_id: orderId, customer_id: order.customer.id, tax_rate: taxRate,
+    order_id: orderId, customer_id: order.customer.id, type, tax_rate: taxRate,
     currency: settings.currency_code, terms_days: settings.default_terms_days,
     notes: settings.invoice_default_notes,
     subtotal: totals.subtotal, tax_amount: totals.tax_amount, total: totals.total,
@@ -228,14 +233,23 @@ export async function issueInvoice(invoiceId: string): Promise<Result<{ invoice_
   const settings = await getCompanySettings();
   const issueDate = new Date();
   const iso = businessDate(issueDate);
-  const due = addDays(iso, invoice.terms_days);
+  const proforma = invoice.type === "proforma";
 
-  // Gapless number, scoped to the fiscal year.
+  // A proforma is an offer, not a supply. It gets its own gapless series
+  // because the tax invoice series has to stay unbroken for the tax
+  // authority, and burning a number on a quote that may never be
+  // accepted would put a hole in it.
+  const prefix = proforma ? settings.proforma_prefix : settings.invoice_prefix;
   const fy = fiscalYearLabel(issueDate, settings.fiscal_year_start_month);
   const short = fy.slice(2, 4) + fy.slice(-2);
-  const scope = `${settings.invoice_prefix}-${fy}`;
-  const seq = await nextDocumentNumber(scope);
-  const number = `${settings.invoice_prefix}-${short}-${String(seq).padStart(5, "0")}`;
+  const seq = await nextDocumentNumber(`${prefix}-${fy}`);
+  const number = `${prefix}-${short}-${String(seq).padStart(5, "0")}`;
+
+  // A tax invoice falls due; a proforma expires. They are not the same
+  // date and must not be stored in the same column, or a quote would
+  // show up in the aged debtors as money somebody owes us.
+  const due = proforma ? null : addDays(iso, invoice.terms_days);
+  const validUntil = proforma ? addDays(iso, settings.proforma_valid_days) : null;
 
   // Freeze both parties. A later change to settings or the customer record
   // must never rewrite an issued document.
@@ -251,8 +265,12 @@ export async function issueInvoice(invoiceId: string): Promise<Result<{ invoice_
 
   // Post to the ledger before marking issued, so a posting failure leaves
   // the invoice as an editable draft rather than an unposted document.
+  //
+  // A proforma posts nothing at all. No goods have been supplied, so
+  // there is no revenue to recognise, no receivable to raise and no
+  // output tax to declare. Booking any of it would be inventing a sale.
   const revenue = round2(invoice.subtotal - invoice.discount);
-  const posted = await postEntry({
+  const posted = proforma ? { ok: true as const, entryId: null } : await postEntry({
     entry_date: iso,
     narration: `Invoice ${number} to ${customer.company_name}`,
     source_type: "invoice",
@@ -269,6 +287,7 @@ export async function issueInvoice(invoiceId: string): Promise<Result<{ invoice_
   const staff = await getCurrentStaff();
   const patch = {
     invoice_number: number, status: "issued" as const, issue_date: iso, due_date: due,
+    valid_until: validUntil,
     seller, buyer, issued_at: new Date().toISOString(), issued_by: staff?.id ?? null,
     journal_entry_id: posted.entryId,
   };
@@ -329,6 +348,15 @@ export async function sendInvoice(invoiceId: string): Promise<Result<{ sent: boo
     ...message,
     attachments: [{ filename: `${invoice.invoice_number}.pdf`, content: pdf.toString("base64") }],
   });
+
+  // Recorded only on a real send, so "sent" on the screen means it left
+  // rather than that somebody pressed the button.
+  if (result.sent) {
+    const stamp = { sent_at: new Date().toISOString(), sent_to: invoice.customer.email };
+    if (isDemo) Object.assign(demo.acc.invoices.find((i) => i.id === invoiceId)!, stamp);
+    else await (await createClient()).from("invoices").update(stamp).eq("id", invoiceId);
+  }
+
   revalidateAll();
   return { ok: true, data: { sent: result.sent, reason: result.reason, to: invoice.customer.email } };
 }
@@ -618,3 +646,301 @@ export async function invoicePdfBytes(invoiceId: string): Promise<Buffer | null>
 }
 
 export type { InvoiceItem };
+
+// ------------------------------------------------------------- proforma
+/**
+ * Turns an accepted proforma into a tax invoice.
+ *
+ * The quote itself is left alone: it keeps its number, stays issued and
+ * records nothing in the ledger, which is exactly what it should do. The
+ * tax invoice is raised as a fresh draft so it can still be checked
+ * before it posts, and it points back at the proforma through
+ * converted_from, which is unique — a quote bills once.
+ *
+ * Quantities are re-derived against what is still uninvoiced, because
+ * between quoting and accepting the goods may have been billed another
+ * way, and a quote is not a reservation.
+ */
+export async function convertProforma(proformaId: string): Promise<Result<{ id: string }>> {
+  const denied = await deny("invoice:write"); if (denied) return denied;
+
+  const proforma = await getInvoice(proformaId);
+  if (!proforma) return { ok: false, error: "Proforma not found." };
+  if (proforma.type !== "proforma") return { ok: false, error: "Only a proforma can be converted." };
+  if (proforma.status !== "issued") return { ok: false, error: "Issue the proforma before converting it." };
+  if (proforma.converted_to) return { ok: false, error: "This proforma has already been converted." };
+
+  // An expiry that is not enforced is decoration. Requoting is a few
+  // clicks; honouring a stale price silently is a margin leak.
+  const today = businessDate();
+  if (proforma.valid_until && proforma.valid_until < today) {
+    return { ok: false, error: `This proforma expired on ${proforma.valid_until}. Raise a fresh one at current prices.` };
+  }
+
+  if (proforma.order_id) {
+    const order = (await getOrders()).find((o) => o.id === proforma.order_id);
+    if (order && order.status !== "approved" && order.status !== "fulfilled") {
+      return { ok: false, error: `Order ${order.order_number} is ${order.status === "cancelled" ? "withdrawn" : order.status}, so this quote cannot be billed.` };
+    }
+  }
+
+  // Clamp to what is genuinely still outstanding on each order line.
+  const remainingByItem = new Map<string, number>();
+  if (proforma.order_id) {
+    const used = await getRemainingToInvoice(proforma.order_id);
+    const order = (await getOrders()).find((o) => o.id === proforma.order_id);
+    for (const l of order?.items ?? []) remainingByItem.set(l.id, l.quantity - (used.get(l.id) ?? 0));
+  }
+
+  const lines = proforma.items
+    .map((l) => {
+      const cap = l.order_item_id ? remainingByItem.get(l.order_item_id) : undefined;
+      return { line: l, quantity: cap === undefined ? l.quantity : Math.min(l.quantity, Math.max(0, cap)) };
+    })
+    .filter((x) => x.quantity > 0);
+
+  if (!lines.length) {
+    return { ok: false, error: "Everything on this quote has since been invoiced another way. Nothing left to bill." };
+  }
+
+  const settings = await getCompanySettings();
+  const totals = computeInvoiceTotals(
+    lines.map((x) => ({ quantity: x.quantity, unit_price: x.line.unit_price })),
+    proforma.discount, proforma.freight, proforma.tax_rate,
+  );
+  const now = new Date().toISOString();
+
+  if (isDemo) {
+    const id = newId();
+    demo.acc.invoices.unshift({
+      id, invoice_number: null, type: "tax_invoice", status: "draft",
+      order_id: proforma.order_id, customer_id: proforma.customer.id,
+      seller: {}, buyer: {}, currency: proforma.currency, tax_rate: proforma.tax_rate,
+      subtotal: totals.subtotal, discount: proforma.discount, freight: proforma.freight,
+      tax_amount: totals.tax_amount, total: totals.total,
+      issue_date: null, due_date: null, terms_days: settings.default_terms_days, notes: proforma.notes,
+      pdf_path: null, pdf_sha256: null, journal_entry_id: null, credit_note_for: null,
+      converted_from: proforma.id, valid_until: null, period_start: null, period_end: null,
+      sent_at: null, sent_to: null,
+      issued_by: null, issued_at: null, voided_at: null, void_reason: null,
+      created_by: null, created_at: now, updated_at: now,
+    });
+    lines.forEach((x, i) =>
+      demo.acc.invoiceItems.push({
+        id: newId(), invoice_id: id, order_item_id: x.line.order_item_id,
+        sku: x.line.sku, name: x.line.name, unit_of_measure: x.line.unit_of_measure,
+        quantity: x.quantity, unit_price: x.line.unit_price,
+        line_total: round2(x.quantity * x.line.unit_price), sort_order: i,
+      }),
+    );
+    revalidateAll();
+    return { ok: true, data: { id } };
+  }
+
+  const supabase = await createClient();
+  const { data: inv, error } = await supabase.from("invoices").insert({
+    order_id: proforma.order_id, customer_id: proforma.customer.id, type: "tax_invoice",
+    converted_from: proforma.id,
+    currency: proforma.currency, tax_rate: proforma.tax_rate, terms_days: settings.default_terms_days,
+    notes: proforma.notes, discount: proforma.discount, freight: proforma.freight,
+    subtotal: totals.subtotal, tax_amount: totals.tax_amount, total: totals.total,
+  }).select("id").single();
+  if (error || !inv) {
+    // The unique index is the real guard against billing a quote twice.
+    if (error?.code === "23505") return { ok: false, error: "This proforma has already been converted." };
+    return { ok: false, error: error?.message ?? "Could not raise the invoice." };
+  }
+
+  const { error: itemsError } = await supabase.from("invoice_items").insert(
+    lines.map((x, i) => ({
+      invoice_id: inv.id, order_item_id: x.line.order_item_id,
+      sku: x.line.sku, name: x.line.name, unit_of_measure: x.line.unit_of_measure,
+      quantity: x.quantity, unit_price: x.line.unit_price,
+      line_total: round2(x.quantity * x.line.unit_price), sort_order: i,
+    })),
+  );
+  if (itemsError) {
+    await supabase.from("invoices").delete().eq("id", inv.id);
+    return { ok: false, error: itemsError.message };
+  }
+
+  revalidateAll();
+  return { ok: true, data: { id: inv.id } };
+}
+
+// --------------------------------------------------------- consolidated
+export interface ConsolidatedInput {
+  customerId: string;
+  /** Inclusive business dates, YYYY-MM-DD. */
+  from: string;
+  to: string;
+}
+
+/**
+ * One invoice covering every order a customer placed in a period.
+ *
+ * A customer ordering twice a week got eight invoices a month and eight
+ * payments to reconcile. This bills the lot once. The invoice carries no
+ * order_id — there is no single order — and is tied to the orders it
+ * bills purely through invoice_items.order_item_id, which is the same
+ * linkage a part-shipment already used and the only thing that stays
+ * true when one document spans several orders.
+ *
+ * It is raised as a draft, because a month's billing is exactly the sort
+ * of document somebody should read before it posts.
+ */
+export async function createConsolidatedInvoice(input: ConsolidatedInput): Promise<Result<{ id: string; orders: number; lines: number }>> {
+  const denied = await deny("invoice:write"); if (denied) return denied;
+  if (!input.from || !input.to) return { ok: false, error: "Give a period to bill." };
+  if (input.to < input.from) return { ok: false, error: "The period ends before it starts." };
+
+  const customer = await getCustomerById(input.customerId);
+  if (!customer) return { ok: false, error: "Customer not found." };
+
+  const orders = (await getOrders({ customerId: input.customerId })).filter((o) => {
+    if (o.status !== "approved" && o.status !== "fulfilled") return false;
+    const on = businessDate(new Date(o.created_at));
+    return on >= input.from && on <= input.to;
+  });
+  if (!orders.length) return { ok: false, error: "No billable orders for that customer in that period." };
+  if (orders.some((o) => o.invoices.some((i) => i.status === "draft" && i.type === "tax_invoice"))) {
+    return { ok: false, error: "One of these orders already has a draft invoice. Issue or discard it first." };
+  }
+
+  // Each order contributes only what is still uninvoiced, so running the
+  // month twice, or running it after somebody billed one order by hand,
+  // cannot bill the same goods again.
+  const picked: { order: typeof orders[number]; item: typeof orders[number]["items"][number]; quantity: number }[] = [];
+  for (const order of orders) {
+    const used = await getRemainingToInvoice(order.id);
+    for (const item of order.items) {
+      const remaining = item.quantity - (used.get(item.id) ?? 0);
+      if (remaining > 0) picked.push({ order, item, quantity: remaining });
+    }
+  }
+  if (!picked.length) return { ok: false, error: "Everything in that period has already been invoiced." };
+
+  // Grouped by order so the document reads as a statement of the month
+  // rather than a jumble of lines.
+  picked.sort((a, b) =>
+    a.order.created_at.localeCompare(b.order.created_at) || a.item.name.localeCompare(b.item.name));
+
+  const settings = await getCompanySettings();
+  const taxRate = Number(settings.default_tax_rate);
+  const totals = computeInvoiceTotals(
+    picked.map((x) => ({ quantity: x.quantity, unit_price: x.item.price_at_purchase })), 0, 0, taxRate,
+  );
+  const now = new Date().toISOString();
+  const orderCount = new Set(picked.map((x) => x.order.id)).size;
+
+  // Each line says which order it came from, because a consolidated
+  // invoice is unreadable without that and the buyer will ask.
+  const label = (x: typeof picked[number]) => `${x.item.name} · ${x.order.order_number}`;
+
+  if (isDemo) {
+    const id = newId();
+    demo.acc.invoices.unshift({
+      id, invoice_number: null, type: "tax_invoice", status: "draft",
+      order_id: null, customer_id: input.customerId,
+      seller: {}, buyer: {}, currency: settings.currency_code, tax_rate: taxRate,
+      subtotal: totals.subtotal, discount: 0, freight: 0, tax_amount: totals.tax_amount, total: totals.total,
+      issue_date: null, due_date: null, terms_days: settings.default_terms_days,
+      notes: settings.invoice_default_notes,
+      pdf_path: null, pdf_sha256: null, journal_entry_id: null, credit_note_for: null,
+      converted_from: null, valid_until: null, period_start: input.from, period_end: input.to,
+      sent_at: null, sent_to: null,
+      issued_by: null, issued_at: null, voided_at: null, void_reason: null,
+      created_by: null, created_at: now, updated_at: now,
+    });
+    picked.forEach((x, i) =>
+      demo.acc.invoiceItems.push({
+        id: newId(), invoice_id: id, order_item_id: x.item.id,
+        sku: x.item.sku, name: label(x), unit_of_measure: "Each",
+        quantity: x.quantity, unit_price: x.item.price_at_purchase,
+        line_total: round2(x.quantity * x.item.price_at_purchase), sort_order: i,
+      }),
+    );
+    revalidateAll();
+    return { ok: true, data: { id, orders: orderCount, lines: picked.length } };
+  }
+
+  const supabase = await createClient();
+  const { data: inv, error } = await supabase.from("invoices").insert({
+    order_id: null, customer_id: input.customerId, tax_rate: taxRate,
+    currency: settings.currency_code, terms_days: settings.default_terms_days,
+    notes: settings.invoice_default_notes,
+    period_start: input.from, period_end: input.to,
+    subtotal: totals.subtotal, tax_amount: totals.tax_amount, total: totals.total,
+  }).select("id").single();
+  if (error || !inv) return { ok: false, error: error?.message ?? "Could not create the consolidated draft." };
+
+  const { error: itemsError } = await supabase.from("invoice_items").insert(
+    picked.map((x, i) => ({
+      invoice_id: inv.id, order_item_id: x.item.id, sku: x.item.sku, name: label(x),
+      quantity: x.quantity, unit_price: x.item.price_at_purchase,
+      line_total: round2(x.quantity * x.item.price_at_purchase), sort_order: i,
+    })),
+  );
+  if (itemsError) {
+    await supabase.from("invoices").delete().eq("id", inv.id);
+    return { ok: false, error: itemsError.message };
+  }
+
+  revalidateAll();
+  return { ok: true, data: { id: inv.id, orders: orderCount, lines: picked.length } };
+}
+
+export interface BillingRunRow {
+  customerId: string;
+  company: string;
+  ok: boolean;
+  invoiceId?: string;
+  orders?: number;
+  reason?: string;
+}
+
+/**
+ * The monthly run: one consolidated draft per account that is set to be
+ * billed that way.
+ *
+ * Every customer is attempted and the failures are reported rather than
+ * thrown, because "nothing to bill" is a perfectly normal outcome for
+ * half the list and must not stop the other half.
+ */
+export async function runConsolidatedBilling(from: string, to: string): Promise<Result<{ rows: BillingRunRow[] }>> {
+  const denied = await deny("invoice:write"); if (denied) return denied;
+
+  const customers = (await getCustomers()).filter((c) => c.consolidated_billing);
+  if (!customers.length) {
+    return { ok: false, error: "No accounts are set to consolidated billing. Turn it on for a customer first." };
+  }
+
+  const rows: BillingRunRow[] = [];
+  for (const c of customers) {
+    const res = await createConsolidatedInvoice({ customerId: c.id, from, to });
+    rows.push(
+      res.ok
+        ? { customerId: c.id, company: c.company_name ?? c.email, ok: true, invoiceId: res.data!.id, orders: res.data!.orders }
+        : { customerId: c.id, company: c.company_name ?? c.email, ok: false, reason: res.error },
+    );
+  }
+
+  revalidateAll();
+  return { ok: true, data: { rows } };
+}
+
+/** Whether this account is billed per order or once per period. */
+export async function setConsolidatedBilling(customerId: string, on: boolean): Promise<Result> {
+  const denied = await deny("invoice:write"); if (denied) return denied;
+  if (isDemo) {
+    const c = demo.customers.find((c) => c.id === customerId);
+    if (!c) return { ok: false, error: "Customer not found." };
+    c.consolidated_billing = on;
+  } else {
+    const { error } = await (await createClient()).from("users").update({ consolidated_billing: on }).eq("id", customerId);
+    if (error) return { ok: false, error: error.message };
+  }
+  revalidateAll();
+  revalidatePath(`/admin/customers/${customerId}`);
+  return { ok: true };
+}

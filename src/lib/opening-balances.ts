@@ -310,6 +310,7 @@ async function createOpeningInvoices(
     for (const p of payload) {
       demo.acc.invoices.unshift({
         ...p, id: newId(), pdf_path: null, pdf_sha256: null, credit_note_for: null,
+        converted_from: null, valid_until: null, period_start: null, period_end: null, sent_at: null, sent_to: null,
         voided_at: null, void_reason: null, created_by: by, created_at: now, updated_at: now,
       });
     }

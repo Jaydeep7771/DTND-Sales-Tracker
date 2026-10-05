@@ -93,6 +93,7 @@ export function seedAccounting(uuid: (seed: string) => string): DemoAccounting {
     ntn: null,
     strn: null,
     bank_details: null,
+    proforma_prefix: "PI", proforma_valid_days: 14,
     default_tax_rate: 0.18,
     default_terms_days: 30,
     invoice_prefix: "INV",

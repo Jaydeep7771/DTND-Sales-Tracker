@@ -47,6 +47,7 @@ const NAV: { href: string; label: string; icon: string; cap: Capability }[] = [
   { href: "/admin/customers",  label: "Customers",         icon: "customers", cap: "customer:read" },
   { href: "/admin/pricing",    label: "Pricing",           icon: "pricing",   cap: "pricing:read" },
   { href: "/admin/applications", label: "Applications",    icon: "applications", cap: "customer:read" },
+  { href: "/admin/invoices",   label: "Invoices",          icon: "invoices",  cap: "invoice:read" },
   { href: "/admin/receivables", label: "Aged debtors",     icon: "receivables", cap: "report:read" },
   { href: "/admin/accounts",   label: "Chart of accounts", icon: "ledger",    cap: "ledger:read" },
   { href: "/admin/journal",    label: "Day book",          icon: "journal",   cap: "ledger:read" },
