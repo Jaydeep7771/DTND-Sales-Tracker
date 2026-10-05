@@ -79,15 +79,31 @@ if (profile.role !== "admin") {
   }
 }
 
-const { error: linkError } = await admin.auth.resetPasswordForEmail(email, {
-  redirectTo: `${cfg.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000"}/reset-password`,
+// A link is generated rather than emailed, so this works before any mail
+// provider is configured and the owner still chooses their own password.
+const site = cfg.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
+const { data: link, error: linkError } = await admin.auth.admin.generateLink({
+  type: "recovery",
+  email,
+  options: { redirectTo: `${site}/reset-password` },
 });
 
-console.log(`\n  Admin created: ${profile.email}`);
+console.log(`
+  Admin created: ${profile.email}`);
 console.log(`  Role:          admin`);
-console.log(
-  linkError
-    ? `\n  Password email could not be sent (${linkError.message}).\n  Use "Forgot your password?" on /login to set one.`
-    : `\n  A password-setting email has been sent to ${email}.`,
-);
-console.log(`  Or set one any time from /forgot-password.\n`);
+
+if (linkError) {
+  console.log(`
+  Could not generate a set-password link (${linkError.message}).`);
+  console.log(`  Use "Forgot your password?" on ${site}/login instead.
+`);
+} else {
+  console.log(`
+  Open this once to set your password:
+`);
+  console.log(`  ${link.properties.action_link}
+`);
+  console.log(`  Single use, expires in an hour. After that use`);
+  console.log(`  "Forgot your password?" on ${site}/login.
+`);
+}
