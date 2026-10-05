@@ -1,7 +1,7 @@
 // In-memory demo data, seeded from the design prototype. Used whenever
 // Supabase keys are not configured so the app is runnable out of the box.
 // State lives on globalThis so it survives Next.js dev HMR reloads.
-import type { StockMovement, Product, Announcement, UserProfile, OrderStatus, OrderMessage } from "@/types/database";
+import type { StockMovement, Product, Announcement, UserProfile, OrderStatus, OrderMessage, CustomerApplication } from "@/types/database";
 import { seedAccounting, type DemoAccounting } from "@/lib/demo-accounting";
 
 interface DemoOrder {
@@ -25,6 +25,7 @@ interface DemoState {
   staff: UserProfile[];
   acc: DemoAccounting;
   stock: StockMovement[];
+  applications: CustomerApplication[];
   nextOrderNumber: number;
 }
 
@@ -93,6 +94,8 @@ function seed(): DemoState {
   ].map(([company, email], i) => ({
     id: uuid(email), email, role: "customer" as const, company_name: company,
     billing_address: "Warehouse 3, SITE Area, Karachi", ntn: null, strn: null,
+    is_active: true, suspended_at: null, suspended_by: null, suspend_reason: null,
+    invite_expires_at: null, invited_by: null,
     // A spread of limits, with one account stopped, so credit control has
     // something real to act on rather than every customer being unlimited.
     credit_limit: [1500000, 750000, 0, 2000000, 400000, 1000000, 600000][i] ?? 0,
@@ -102,8 +105,8 @@ function seed(): DemoState {
   }));
 
   const staff: UserProfile[] = [
-    { id: uuid("admin"), email: "rashid@dynamictraders.pk", role: "admin", company_name: "Rashid Khan", billing_address: null, ntn: null, strn: null, credit_limit: 0, credit_hold: false, payment_terms_days: null, invite_token: null, invited_at: now, activated_at: now, created_at: now },
-    { id: uuid("finance"), email: "accounts@dynamictraders.pk", role: "finance", company_name: "Nadia Aslam", billing_address: null, ntn: null, strn: null, credit_limit: 0, credit_hold: false, payment_terms_days: null, invite_token: null, invited_at: now, activated_at: now, created_at: now },
+    { id: uuid("admin"), email: "rashid@dynamictraders.pk", role: "admin", company_name: "Rashid Khan", billing_address: null, ntn: null, strn: null, is_active: true, suspended_at: null, suspended_by: null, suspend_reason: null, invite_expires_at: null, invited_by: null, credit_limit: 0, credit_hold: false, payment_terms_days: null, invite_token: null, invited_at: now, activated_at: now, created_at: now },
+    { id: uuid("finance"), email: "accounts@dynamictraders.pk", role: "finance", company_name: "Nadia Aslam", billing_address: null, ntn: null, strn: null, is_active: true, suspended_at: null, suspended_by: null, suspend_reason: null, invite_expires_at: null, invited_by: null, credit_limit: 0, credit_hold: false, payment_terms_days: null, invite_token: null, invited_at: now, activated_at: now, created_at: now },
   ];
   const byEmail = (e: string) => customers.find((c) => c.email === e)!;
 
@@ -330,11 +333,23 @@ function seed(): DemoState {
       }
     });
 
-  return { products, customers, orders, announcements, messages: [], staff, acc, stock, nextOrderNumber: 24189 };
+    // One pending application, so the review queue has something in it.
+  const applications: CustomerApplication[] = [{
+    id: uuid("app1"), status: "pending",
+    company_name: "Clifton Hardware Mart", contact_name: "Bilal Siddiqui",
+    email: "bilal@cliftonhardware.pk", phone: "+92 300 2214477",
+    address: "Shop 14, Block 5, Clifton", city: "Karachi",
+    ntn: "7781234-5", strn: null, business_type: "Hardware store",
+    years_trading: 6, note: "Referred by Meezan Hardware. Looking for monthly terms.",
+    customer_id: null, reviewed_by: null, reviewed_at: null, review_note: null,
+    created_at: new Date(Date.now() - 2 * 86400e3).toISOString(),
+  }];
+
+  return { products, customers, orders, announcements, messages: [], staff, acc, stock, applications, nextOrderNumber: 24189 };
 }
 
 // Bump when DemoState changes shape so HMR-preserved state is reseeded.
-const DEMO_VERSION = 13; // withholding receivable account added
+const DEMO_VERSION = 14; // withholding receivable account added
 const g = globalThis as unknown as { __dtndDemo?: DemoState; __dtndDemoVersion?: number };
 if (!g.__dtndDemo || g.__dtndDemoVersion !== DEMO_VERSION) {
   g.__dtndDemo = seed();

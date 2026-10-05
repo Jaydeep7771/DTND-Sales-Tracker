@@ -10,7 +10,7 @@ import { demo, newId, DEMO_ADMIN_ID, DEMO_ADMIN, DEMO_ROLE_COOKIE } from "@/lib/
 import { can, isStaff, type Capability } from "@/lib/permissions";
 import type { UserRole } from "@/types/database";
 import { inviteEmail, sendEmail } from "@/lib/email";
-import { inviteUrlFor } from "@/lib/invite";
+import { inviteExpiry, inviteUrlFor, isInviteExpired } from "@/lib/invite";
 import { isDemo, getOrder, getCustomerExposure, DEMO_CUSTOMER_COOKIE } from "@/lib/data";
 import { adjustStock, dispatchOrder, recordOpeningStock } from "@/lib/inventory";
 import { creditCheck } from "@/lib/receivables";
@@ -356,10 +356,11 @@ export async function onboardCustomer(input: { company_name: string; email: stri
   if (!company) return { ok: false, error: "Company name is required." };
   const token = crypto.randomUUID().replace(/-/g, "");
   const now = new Date().toISOString();
+  const expires = inviteExpiry();
 
   if (isDemo) {
     if (demo.customers.some((c) => c.email === email)) return { ok: false, error: "A customer with that email already exists." };
-    demo.customers.push({ id: newId(), email, role: "customer", company_name: company, billing_address: null, ntn: null, strn: null, credit_limit: 0, credit_hold: false, payment_terms_days: null, invite_token: token, invited_at: now, activated_at: null, created_at: now });
+    demo.customers.push({ id: newId(), email, role: "customer", company_name: company, billing_address: null, ntn: null, strn: null, is_active: true, suspended_at: null, suspended_by: null, suspend_reason: null, invite_expires_at: expires, invited_by: null, credit_limit: 0, credit_hold: false, payment_terms_days: null, invite_token: token, invited_at: now, activated_at: null, created_at: now });
   } else {
     const admin = createAdminClient();
     const { data: created, error } = await admin.auth.admin.createUser({
@@ -369,7 +370,7 @@ export async function onboardCustomer(input: { company_name: string; email: stri
       user_metadata: { role: "customer", company_name: company },
     });
     if (error || !created.user) return { ok: false, error: error?.message ?? "Could not create user." };
-    const { error: tokenError } = await admin.from("users").update({ invite_token: token, invited_at: now }).eq("id", created.user.id);
+    const { error: tokenError } = await admin.from("users").update({ invite_token: token, invited_at: now, invite_expires_at: expires }).eq("id", created.user.id);
     if (tokenError) return { ok: false, error: tokenError.message };
   }
 
@@ -392,15 +393,16 @@ export async function resendInvite(customerId: string): Promise<Result<InviteRes
 /** Issues a fresh link (invalidating the old one) and emails it. */
 export async function regenerateInvite(customerId: string): Promise<Result<InviteResult>> {
   const token = crypto.randomUUID().replace(/-/g, "");
+  const expires = inviteExpiry();
   let c: { email: string; company_name: string | null } | undefined;
   if (isDemo) {
     const d = demo.customers.find((c) => c.id === customerId);
     if (!d) return { ok: false, error: "Customer not found." };
-    d.invite_token = token; d.invited_at = new Date().toISOString();
+    d.invite_token = token; d.invited_at = new Date().toISOString(); d.invite_expires_at = expires;
     c = d;
   } else {
     const admin = createAdminClient();
-    const { data, error } = await admin.from("users").update({ invite_token: token, invited_at: new Date().toISOString() }).eq("id", customerId).select("email, company_name").single();
+    const { data, error } = await admin.from("users").update({ invite_token: token, invited_at: new Date().toISOString(), invite_expires_at: expires }).eq("id", customerId).select("email, company_name").single();
     if (error || !data) return { ok: false, error: error?.message ?? "Customer not found." };
     c = data;
   }
@@ -410,33 +412,67 @@ export async function regenerateInvite(customerId: string): Promise<Result<Invit
 }
 
 /** Looks up an invite token. Used by the /invite/[token] page. */
-export async function getInvite(token: string): Promise<{ email: string; company_name: string | null; activated: boolean } | null> {
-  if (isDemo) {
-    const c = demo.customers.find((c) => c.invite_token === token);
-    return c ? { email: c.email, company_name: c.company_name, activated: !!c.activated_at } : null;
-  }
-  const { data } = await createAdminClient().from("users").select("email, company_name, activated_at").eq("invite_token", token).maybeSingle();
-  return data ? { email: data.email, company_name: data.company_name, activated: !!data.activated_at } : null;
+export interface InviteView {
+  email: string;
+  company_name: string | null;
+  activated: boolean;
+  expired: boolean;
+  expires_at: string | null;
 }
+
+export async function getInvite(token: string): Promise<InviteView | null> {
+  const row = isDemo
+    ? [...demo.customers, ...demo.staff].find((c) => c.invite_token === token)
+    : (await createAdminClient()
+        .from("users")
+        .select("email, company_name, activated_at, invite_expires_at, is_active")
+        .eq("invite_token", token)
+        .maybeSingle()).data;
+  if (!row) return null;
+
+  return {
+    email: row.email,
+    company_name: row.company_name,
+    activated: !!row.activated_at,
+    expired: isInviteExpired(row.invite_expires_at),
+    expires_at: row.invite_expires_at,
+  };
+}
+
+
 
 /** Customer accepts the invite: sets a password (live) and is signed in to the portal. */
 export async function acceptInvite(token: string, password: string): Promise<Result> {
   if (isDemo) {
-    const c = demo.customers.find((c) => c.invite_token === token);
+    const c = [...demo.customers, ...demo.staff].find((c) => c.invite_token === token);
     if (!c) return { ok: false, error: "This invite link is invalid or has already been used." };
+    if (isInviteExpired(c.invite_expires_at)) {
+      return { ok: false, error: "This invite link has expired. Ask Dynamic Traders to send a new one." };
+    }
+    if (!c.is_active) return { ok: false, error: "This account has been suspended." };
     c.activated_at = new Date().toISOString();
     c.invite_token = null;
+    c.invite_expires_at = null;
     (await cookies()).set(DEMO_CUSTOMER_COOKIE, c.id, { path: "/", httpOnly: true, sameSite: "lax" });
     revalidateAll();
     return { ok: true };
   }
   if (password.length < 8) return { ok: false, error: "Password must be at least 8 characters." };
   const admin = createAdminClient();
-  const { data: profile } = await admin.from("users").select("id, email").eq("invite_token", token).maybeSingle();
+  const { data: profile } = await admin
+    .from("users").select("id, email, invite_expires_at, is_active")
+    .eq("invite_token", token).maybeSingle();
   if (!profile) return { ok: false, error: "This invite link is invalid or has already been used." };
+  if (isInviteExpired(profile.invite_expires_at)) {
+    return { ok: false, error: "This invite link has expired. Ask Dynamic Traders to send a new one." };
+  }
+  if (!profile.is_active) return { ok: false, error: "This account has been suspended." };
+
   const { error } = await admin.auth.admin.updateUserById(profile.id, { password });
   if (error) return { ok: false, error: error.message };
-  await admin.from("users").update({ invite_token: null, activated_at: new Date().toISOString() }).eq("id", profile.id);
+  await admin.from("users").update({
+    invite_token: null, invite_expires_at: null, activated_at: new Date().toISOString(),
+  }).eq("id", profile.id);
   const { error: signInError } = await (await createClient()).auth.signInWithPassword({ email: profile.email, password });
   if (signInError) return { ok: false, error: signInError.message };
   revalidateAll();
@@ -606,7 +642,18 @@ export async function signIn(email: string, password: string): Promise<Result<{ 
   const { error } = await supabase.auth.signInWithPassword({ email, password });
   if (error) return { ok: false, error: error.message };
   const { data: { user } } = await supabase.auth.getUser();
-  const { data: profile } = await supabase.from("users").select("role").eq("id", user!.id).single();
+  const { data: profile } = await supabase.from("users").select("role, is_active, suspend_reason").eq("id", user!.id).single();
+
+  // Checked after the password, not before: answering differently for a
+  // suspended account than a wrong password would confirm the address
+  // exists to anyone guessing.
+  if (profile && !profile.is_active) {
+    await supabase.auth.signOut();
+    return {
+      ok: false,
+      error: "This account has been suspended. Contact Dynamic Traders if you think that is a mistake.",
+    };
+  }
   return { ok: true, data: { role: profile?.role ?? "customer" } };
 }
 

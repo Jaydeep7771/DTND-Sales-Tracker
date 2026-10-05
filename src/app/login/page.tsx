@@ -2,6 +2,7 @@
 
 import { useState, useTransition, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import { Button, Field, Input } from "@/components/ui";
 import { signIn } from "@/lib/actions";
 
@@ -37,6 +38,10 @@ export default function LoginPage() {
         <Field label="Email"><Input type="email" required autoComplete="email" value={email} onChange={(e) => setEmail(e.target.value)} /></Field>
         <Field label="Password"><Input type="password" required autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} /></Field>
         <Button size="lg" type="submit" disabled={busy}>{busy ? "Signing in…" : "Sign in"}</Button>
+        <div className="flex items-center justify-between gap-3 text-[12.5px] pt-1">
+          <Link href="/forgot-password" className="text-navy-hover no-underline">Forgot your password?</Link>
+          <Link href="/register" className="text-slate no-underline hover:text-navy-hover">Apply for an account</Link>
+        </div>
       </form>
     </div>
   );

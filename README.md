@@ -42,6 +42,10 @@ when the dev server restarts.
 | `/admin/orders` | Order queue in split or kanban view; approve / **send back with comments and adjusted quantities** / reject / mark fulfilled, plus a per-order conversation thread |
 | `/admin/customers/[id]` | Customer detail: receivables tiles, invoices, orders, the customer ledger with running balance, editable billing and tax identity, and portal access |
 | `/admin/customers` | Customer list with invite status and the live invite link (copy / open / resend email / new link), and **Onboard customer** which creates the account, generates the single-use link and emails it |
+| `/register` | Public trade account application |
+| `/forgot-password`, `/reset-password` | Self-service password reset |
+| `/admin/applications` | Review queue for applications |
+| `/admin/staff` | Staff, roles and sign-in access |
 | `/invite/[token]` | Customer opens the invite link, sets a password, and lands in the catalog |
 | `/admin/cms` | Announcements and FAQs with publish toggles |
 | `/admin/settings` | Company identity, currency, tax rate, invoice numbering and invoice design, with a live preview |
@@ -173,6 +177,28 @@ Both run through `postEntry`, so the balance rule, period locking, gapless numbe
 **The contra side is always Opening Balance Equity, never revenue or expense.** Those sales were made before go-live; recognising them now would inflate this year's profit with last year's trading. Opening invoices carry no tax for the same reason — that tax was reported before you started.
 
 The running strip at the bottom shows what is still out of balance and what will go to equity. Committing optionally closes every period up to the go-live date so nothing can slip behind the opening position; if an existing period overlaps, it says so rather than silently skipping the lock.
+
+## Access and accounts
+
+Run `supabase/09-access.sql`.
+
+**Invite links expire after seven days.** `invited_at` used to be stored and never read, so a link mailed a year ago still created an account. Expired links can be re-issued in one click from the customer page or the staff screen. Links issued before this rule still work: breaking what was already in people's inboxes would have been the worse failure.
+
+**Password reset is self-service.** `/forgot-password` sends a Supabase reset link. It reports the same thing whether or not the address is registered, because confirming which emails have accounts hands a stranger a customer list. A suspended account gets no link, since that would return access deliberately taken away.
+
+**Suspension is separate from credit hold, on purpose.** A credit hold is commercial: the customer stays in the portal, sees their history and cannot order. Suspension closes the door, ends any open session, and is checked by `is_staff()` and `is_admin()` so a suspended staff account loses its row-level access too. Confusing the two means either locking out a good customer over a late payment, or leaving a former one browsing your wholesale prices.
+
+**Staff management** lives at `/admin/staff`: invite an admin or finance colleague, change a role, suspend or restore. It reuses the customer invite mechanism rather than inventing a second one. You cannot change your own role or suspend yourself, which is what stops the last admin locking everyone out.
+
+## Trade account applications
+
+`/register` is the public form. A wholesale account is not self-serve — it carries trade credit and shows wholesale pricing — so an application is reviewed before it becomes an account.
+
+The form asks who you are, who we deal with, where we deliver and your tax identity. **Tax details are optional at this stage**: chasing an NTN before someone has been accepted loses applications, and the review screen flags when one is missing so it can be collected at approval.
+
+`/admin/applications` is the queue. Approving opens the account and sends the invite in one step, and copies the address and tax details onto the customer record so nothing is retyped. Declining requires a reason, which is emailed: an applicant told plainly why does not phone the office to ask.
+
+Submitting twice gives the same confirmation without creating a second application, and the form never reveals whether an email already has an account.
 
 ## Email
 

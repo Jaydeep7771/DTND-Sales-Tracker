@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 import { Badge, Button, Card, OrderBadge } from "@/components/ui";
 import BillingDetailsCard from "@/components/admin/BillingDetailsCard";
 import CreditControlCard from "@/components/admin/CreditControlCard";
+import AccountAccessCard from "@/components/admin/AccountAccessCard";
 import AdvanceCard from "@/components/admin/AdvanceCard";
 import InviteStatus from "@/components/admin/InviteStatus";
 import ReceiptsCard from "@/components/admin/ReceiptsCard";
@@ -231,6 +232,8 @@ export default async function CustomerDetailPage({ params }: { params: Promise<{
           />
 
           <BillingDetailsCard customer={customer} canEdit={canBill} />
+
+          <AccountAccessCard customer={customer} canEdit={canBill} />
 
           <Card>
             <div className="px-4 py-3.5 border-b border-border">

@@ -4,7 +4,7 @@ export type UserRole = "admin" | "finance" | "customer";
 export type OrderStatus = "pending" | "changes_requested" | "approved" | "rejected" | "fulfilled" | "cancelled";
 export type AnnouncementType = "announcement" | "faq";
 
-type UsersRow = { id: string; email: string; role: UserRole; company_name: string | null; billing_address: string | null; ntn: string | null; strn: string | null; credit_limit: number; credit_hold: boolean; payment_terms_days: number | null; invite_token: string | null; invited_at: string | null; activated_at: string | null; created_at: string };
+type UsersRow = { id: string; email: string; role: UserRole; company_name: string | null; billing_address: string | null; ntn: string | null; strn: string | null; is_active: boolean; suspended_at: string | null; suspended_by: string | null; suspend_reason: string | null; invite_expires_at: string | null; invited_by: string | null; credit_limit: number; credit_hold: boolean; payment_terms_days: number | null; invite_token: string | null; invited_at: string | null; activated_at: string | null; created_at: string };
 type OrderMessagesRow = { id: string; order_id: string; author_id: string; author_role: UserRole; body: string; created_at: string };
 type ProductsRow = {
   id: string;
@@ -123,6 +123,19 @@ type BillPaymentsRow = {
 };
 export type BillPayment = BillPaymentsRow;
 
+type ApplicationStatusDb = "pending" | "approved" | "rejected";
+export type ApplicationStatus = ApplicationStatusDb;
+type CustomerApplicationsRow = {
+  id: string; status: ApplicationStatusDb;
+  company_name: string; contact_name: string; email: string; phone: string;
+  address: string; city: string;
+  ntn: string | null; strn: string | null; business_type: string | null;
+  years_trading: number | null; note: string | null;
+  customer_id: string | null; reviewed_by: string | null; reviewed_at: string | null;
+  review_note: string | null; created_at: string;
+};
+export type CustomerApplication = CustomerApplicationsRow;
+
 type PeriodsRow = { id: string; name: string; starts_on: string; ends_on: string; closed_at: string | null; closed_by: string | null; created_at: string };
 export type PeriodRow = PeriodsRow;
 
@@ -136,7 +149,7 @@ type Optional<T, K extends keyof T> = Omit<T, K> & Partial<Pick<T, K>>;
 export interface Database {
   public: {
     Tables: {
-      users: { Row: UsersRow; Insert: Optional<UsersRow, "role" | "company_name" | "billing_address" | "ntn" | "strn" | "credit_limit" | "credit_hold" | "payment_terms_days" | "invite_token" | "invited_at" | "activated_at" | "created_at">; Update: Partial<UsersRow>; Relationships: [] };
+      users: { Row: UsersRow; Insert: Optional<UsersRow, "role" | "company_name" | "billing_address" | "ntn" | "strn" | "is_active" | "suspended_at" | "suspended_by" | "suspend_reason" | "invite_expires_at" | "invited_by" | "credit_limit" | "credit_hold" | "payment_terms_days" | "invite_token" | "invited_at" | "activated_at" | "created_at">; Update: Partial<UsersRow>; Relationships: [] };
       accounts:           { Row: AccountsRow;        Insert: Optional<AccountsRow, "id" | "parent_id" | "system_key" | "is_group" | "is_active" | "created_at">; Update: Partial<AccountsRow>; Relationships: [] };
       journal_entries:    { Row: JournalEntriesRow;  Insert: Optional<JournalEntriesRow, "id" | "source_type" | "source_id" | "reversal_of" | "posted_by" | "posted_at">; Update: Partial<JournalEntriesRow>; Relationships: [] };
       journal_lines:      { Row: JournalLinesRow;    Insert: Optional<JournalLinesRow, "id" | "debit" | "credit" | "party_id" | "memo" | "sort_order">; Update: Partial<JournalLinesRow>; Relationships: [] };
@@ -149,6 +162,7 @@ export interface Database {
       bills:          { Row: BillsRow;        Insert: Optional<BillsRow, "id" | "bill_number" | "status" | "due_date" | "terms_days" | "tax_rate" | "subtotal" | "freight" | "tax_amount" | "total" | "notes" | "journal_entry_id" | "posted_by" | "posted_at" | "voided_at" | "void_reason" | "created_by" | "created_at" | "updated_at">; Update: Partial<BillsRow>; Relationships: [] };
       bill_items:     { Row: BillItemsRow;    Insert: Optional<BillItemsRow, "id" | "product_id" | "sort_order">; Update: Partial<BillItemsRow>; Relationships: [] };
       bill_payments:  { Row: BillPaymentsRow; Insert: Optional<BillPaymentsRow, "id" | "paid_on" | "method" | "reference" | "note" | "journal_entry_id" | "recorded_by" | "reversed_at" | "reversal_reason" | "reversed_by" | "created_at">; Update: Partial<BillPaymentsRow>; Relationships: [] };
+      customer_applications: { Row: CustomerApplicationsRow; Insert: Optional<CustomerApplicationsRow, "id" | "status" | "city" | "ntn" | "strn" | "business_type" | "years_trading" | "note" | "customer_id" | "reviewed_by" | "reviewed_at" | "review_note" | "created_at">; Update: Partial<CustomerApplicationsRow>; Relationships: [] };
       accounting_periods: { Row: PeriodsRow;         Insert: Optional<PeriodsRow, "id" | "closed_at" | "closed_by" | "created_at">; Update: Partial<PeriodsRow>; Relationships: [] };
       order_messages: { Row: OrderMessagesRow; Insert: Optional<OrderMessagesRow, "id" | "created_at">; Update: Partial<OrderMessagesRow>; Relationships: [] };
       products: {
